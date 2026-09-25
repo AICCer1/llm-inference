@@ -1,0 +1,6 @@
+# LLM Inference Learning Requirements
+# 基础运行库（纯 Python 标准库即可运行部分仿真脚本，推荐安装 PyTorch 以进行张量运算测试）
+numpy>=1.24.0
+matplotlib>=3.7.0
+# torch (可选，推荐通过官方命令安装对应 CUDA 版本的 torch):
+# pip install torch --index-url https://download.pytorch.org/whl/cu124
