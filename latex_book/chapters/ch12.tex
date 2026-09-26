@@ -1,0 +1,252 @@
+\chapter{推理服务系统：PagedAttention、前缀缓存与调度}
+
+\begin{noteBox}[核心导读与背景]
+\textbf{阅读前须知}：前面九篇都在讲"\textbf{一个请求}怎么算得又对又快"。真实的推理服务同时面对成百上千个请求：它们长短不一、随时到达、随时结束，还常常共享同样的系统提示词。本篇讲推理引擎（vLLM、SGLang、TensorRT-LLM）在\textbf{系统层面}解决的问题：怎么衡量好坏、显存怎么管、请求怎么排。
+
+\textbf{前置}：第 6 篇（KV Cache 显存公式）、Lab 12a（连续批处理仿真）、第 8 篇（Decode 耗时模型 $T_{\text{step}}(B)$）、第 9 篇（Online Softmax 可分块计算）。
+
+\textbf{配套实验}：\textbf{\texttt{lab12b\_paged\_attention/paged\_kv\_cache\_sim.py}}——实现块分配器、块表、分页注意力、写时复制、前缀缓存与 Chunked Prefill 的仿真。
+\end{noteBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{一、先定义"好"：推理服务的指标体系}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{2.5cm} p{3.5cm} X X}
+\toprule
+\textbf{指标} & \textbf{含义} & \textbf{用户感受} & \textbf{主要受谁影响} \\
+\midrule
+\textbf{TTFT}（Time To First Token） & 从请求到达，到第一个 token 返回 & "它开始回答了吗" & 排队时间 + Prefill 时间 \\
+\textbf{TPOT / ITL}（Time Per Output Token / Inter-Token Latency） & 相邻两个输出 token 的间隔 & "打字速度够不够流畅" & 每一步 Decode 的耗时 \\
+\textbf{端到端延迟} & $\text{TTFT} + \text{TPOT} \times (n_{\text{out}} - 1)$ & 总等待时间 & 两者之和 \\
+\textbf{吞吐（Throughput）} & 每秒生成的总 token 数 / 完成的请求数 & 老板关心的成本 & batch 大小、显存利用率 \\
+\textbf{Goodput} & 满足延迟目标（SLO，如 TTFT < 1s 且 TPOT < 50ms）的请求吞吐 & 真正有意义的吞吐 & 以上全部 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+工业界通常看 \textbf{P50 / P99 分位数}，而不是平均值——一次偶发的 2 秒卡顿会被用户记住。
+
+\subsection{Little 定律：并发数从哪来}
+
+排队论的 Little 定律：\textbf{系统中平均请求数 = 到达率 $\times$ 平均停留时间}，$L = \lambda W$。
+例：每秒到达 10 个请求，每个请求平均要生成 10 秒 $\rightarrow$ 系统里同时约有 \textbf{100 个}请求在跑。每个请求上下文 2K token、每 token KV 128 KB（Llama-3-8B），光 KV Cache 就要 $100 \times 2048 \times 128\text{KB} \approx 25$ GB。
+\textbf{并发数由业务决定，显存必须装得下它}——这就是为什么 KV Cache 的显存管理是推理系统的核心问题。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[反向] 二、迭代级调度回顾：为什么连续批处理成立}
+
+Lab 12a 已经仿真过：静态批处理要等整批最长的请求结束，连续批处理在\textbf{每一步}都可以让结束的请求离开、新请求加入（Orca, 2022）。
+它能成立的物理基础是第 8 篇的推导：\textbf{Decode 线性层的算术强度 $\approx$ batch size}，在 batch 远小于拐点时，一步的耗时几乎与 batch 无关。所以"多塞一个请求进这一步"几乎是免费的。
+
+但连续批处理立刻带来两个新问题：
+\begin{enumerate}
+  \item 请求随时进出，\textbf{KV Cache 的显存怎么分配和回收？}（第三\textasciitilde{}五节）
+  \item 新请求的 Prefill 很重，插进正在 Decode 的批次里会怎样？（第六节）
+\end{enumerate}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[模块] 三、KV Cache 的显存碎片：PagedAttention 要解决的问题}
+
+\subsection{传统做法：按最大长度预留连续显存}
+
+请求到达时，并不知道它最终会生成多少 token，于是只能按 \texttt{max\_len}（例如 2048）预留一整块\textbf{连续}显存：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[scale=0.95]
+  \node[anchor=west, font=\sffamily\small\bfseries] at (0, 2.5) {传统连续预留 (按 max\_len=2048 预分配，严重浪费)：};
+  
+  \node[anchor=east, font=\sffamily\footnotesize] at (2.2, 1.8) {请求 A (实际用 300):};
+  \draw[fill=primary!70, draw=primary!90] (2.4, 1.5) rectangle (4.2, 2.1) node[midway, white, font=\tiny\bfseries] {已用 300};
+  \draw[fill=codegray!15, draw=codegray!60, dashed] (4.2, 1.5) rectangle (11.0, 2.1) node[midway, codegray, font=\footnotesize] {内部碎片 (未用浪费 1748)};
+  
+  \node[anchor=east, font=\sffamily\footnotesize] at (2.2, 0.8) {请求 B (实际用 1200):};
+  \draw[fill=primary!70, draw=primary!90] (2.4, 0.5) rectangle (7.8, 1.1) node[midway, white, font=\tiny\bfseries] {已用 1200};
+  \draw[fill=codegray!15, draw=codegray!60, dashed] (7.8, 0.5) rectangle (11.0, 1.1) node[midway, codegray, font=\footnotesize] {内部碎片 (848)};
+  
+  \draw[<->, thick, darktext] (2.4, 0.1) -- (11.0, 0.1) node[midway, below, font=\scriptsize\sffamily] {连续预留长度 max\_len = 2048 tokens};
+\end{tikzpicture}
+\caption{传统连续显存分配的内部碎片问题}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{内部碎片}：预留了却没用上的部分；
+  \item \textbf{外部碎片}：不同大小的连续块反复分配释放后，空闲显存被切成零碎的小段，总量够但凑不出一整块。
+\end{itemize}
+
+vLLM 论文测量发现，当时的系统里 KV Cache 显存\textbf{只有 20\%\textasciitilde{}38\% 真正存了 token}。
+
+\subsection{PagedAttention：把操作系统的虚拟内存搬过来}
+
+操作系统早在几十年前就解决过同样的问题——\textbf{分页}：
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3.5cm} X}
+\toprule
+\textbf{操作系统} & \textbf{PagedAttention} \\
+\midrule
+进程 & 请求（序列） \\
+虚拟页 & 逻辑块（第 0 块 = 第 0\textasciitilde{}15 个 token） \\
+物理页框 & 显存里的物理块（每块存 16 个 token 的 K、V） \\
+页表 & \textbf{块表（Block Table）}：逻辑块号 $\rightarrow$ 物理块号 \\
+缺页时分配 & 写满一块时才分配下一块 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{l X}
+\toprule
+\textbf{请求 ID} & \textbf{逻辑块到物理块映射表 (Block Table)} \\
+\midrule
+\textbf{请求 A} & 逻辑块 0 $\to$ 物理块 7, \quad 逻辑块 1 $\to$ 物理块 2, \quad 逻辑块 2 $\to$ 物理块 9 \\
+\textbf{请求 B} & 逻辑块 0 $\to$ 物理块 4, \quad 逻辑块 1 $\to$ 物理块 0, \quad 逻辑块 2 $\to$ 物理块 5 \\
+\midrule
+\textbf{核心优势} & \textbf{按需分配固定大小的物理块 (如 16 tokens)，物理显存无需连续，内部碎片近乎为零！} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{itemize}
+  \item 每个请求最多只浪费\textbf{最后一个块里没写满的部分}（< 16 个 token）。注意这只是\textbf{上界}：$\frac{15}{S} < 4\%$ 要求序列长度 $S \gtrsim 400$ token；短对话（$S=100$ 时最坏 15\%）远达不到这个数；
+  \item 没有外部碎片：所有块一样大，任何空闲块都能用；
+  \item 结果：同样的显存能容纳 \textbf{2\textasciitilde{}4 倍} 的并发请求，吞吐相应提升。
+\end{itemize}
+
+\subsection{代价：注意力 kernel 要"查表读 KV"}
+
+KV 不再连续，注意力计算时要按块表逐块读取——而第 9 篇已经证明，Online Softmax 让注意力可以\textbf{逐块累加}，所以分页几乎不影响计算效率。这是 PagedAttention 在数学上可行的原因。
+
+\subsection{显存不够时怎么办：抢占}
+
+请求在运行中不断变长，块可能被分完。此时调度器\textbf{抢占}一部分请求：
+\begin{itemize}
+  \item \textbf{换出（Swap）}：把它的 KV 块拷到 CPU 内存，之后再换回；
+  \item \textbf{重算（Recompute）}：直接丢掉它的 KV，之后重新 Prefill（Prefill 是算力受限的，对短序列往往比经 PCIe 拷贝更快）。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{四、共享：引用计数与写时复制}
+
+同一个提示词需要生成多个回答时（并行采样 $n > 1$、束搜索），它们的提示词 KV \textbf{完全相同}。有了块表，共享变得非常自然：
+\begin{itemize}
+  \item 多个序列的块表指向\textbf{同一组物理块}，每个物理块维护一个\textbf{引用计数}；
+  \item 当某个序列要往一个\textbf{被共享且未写满}的块里追加 token 时，先\textbf{复制一份}给自己再写（\textbf{写时复制，Copy-on-Write}）——这同样是操作系统 \texttt{fork()} 的经典技术。
+\end{itemize}
+
+并行采样 4 个回答时，提示词部分的 KV 只存 1 份而不是 4 份。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{五、前缀缓存：跨请求复用 KV}
+
+很多请求的\textbf{开头}是一样的：
+\begin{itemize}
+  \item 所有请求共享同一段几千 token 的\textbf{系统提示词}；
+  \item 多轮对话中，第 $k$ 轮的输入 = 前 $k-1$ 轮的全部内容 + 新问题；
+  \item Few-shot 示例、RAG 中被反复检索到的同一篇文档、Agent 的工具描述。
+\end{itemize}
+
+这些前缀的 KV 完全相同（同样的 token、同样的位置 $\rightarrow$ 同样的 K、V，RoPE 也一样）。\textbf{前缀缓存}让请求结束后 KV 块不立即释放，而是留着等下一个相同前缀的请求复用：
+\begin{itemize}
+  \item \textbf{vLLM 的自动前缀缓存}：对每个\textbf{写满的块}，用"它自己的 token + 它之前所有 token"算一个哈希值作为键；新请求逐块查哈希，命中就直接复用物理块；
+  \item \textbf{SGLang 的 RadixAttention}：用\textbf{基数树（Radix Tree）}组织所有缓存的前缀，按 LRU 淘汰。
+\end{itemize}
+
+\textbf{收益}：命中的部分\textbf{完全跳过 Prefill}。系统提示词 4000 token、用户问题 50 token 时，TTFT 可能降低一个数量级。
+
+\begin{warningBox}[避坑指南与核心警示]
+{}[注意] 前缀必须\textbf{逐 token 完全相同}且从第一个 token 开始。把会变化的内容（例如当前时间）放在系统提示词开头，会让整个缓存失效——这是写提示词时要注意的工程细节。
+\end{warningBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{六、Prefill 与 Decode 的冲突：Chunked Prefill 与 P/D 分离}
+
+\subsection{问题：一个长 Prefill 会让所有人卡住}
+
+连续批处理把新请求的 Prefill 和其他请求的 Decode 放在同一步里。第 8 篇告诉我们：
+\begin{itemize}
+  \item Decode 一步耗时 $\approx$ 读一遍权重的时间（例如 10ms）；
+  \item 一个 8000 token 的 Prefill 是算力受限的，可能要几百毫秒。
+\end{itemize}
+
+它们在同一步里，\textbf{这一步的耗时就由 Prefill 决定}，正在 Decode 的几十个用户会同时看到一次几百毫秒的"卡顿"（TPOT 尖刺）。
+
+\subsection{Chunked Prefill（Sarathi-Serve, 2024）}
+
+把长 Prefill \textbf{切成若干块}（例如每块 512 token），每一步只做一块，和其他请求的 Decode 拼在一起。每一步设一个 \textbf{token 预算}：
+\begin{itemize}
+  \item 每一步的耗时有了上界，Decode 用户不再卡顿；
+  \item 而且 Decode 本来算力闲置（访存受限），顺便塞进一段 Prefill，正好把闲置的算力用上——\textbf{两种瓶颈互补}。
+\end{itemize}
+
+\subsection{P/D 分离（DistServe、Mooncake，2024）}
+
+更彻底的做法：Prefill 和 Decode \textbf{放到不同的 GPU 上}，Prefill 算完后把 KV Cache 通过高速网络传给 Decode 节点。
+\begin{itemize}
+  \item 理由正是第 8 篇：两者的瓶颈完全相反（算力 vs 带宽），硬件配置和并行策略可以分别优化；
+  \item 代价：KV Cache 需要跨机传输，对网络带宽要求高。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{七、一个现代推理引擎里还有什么}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3cm} p{4.5cm} X}
+\toprule
+\textbf{技术} & \textbf{解决的问题} & \textbf{本仓库对应} \\
+\midrule
+CUDA Graph & Decode 一步要启动几百个小 kernel，每个都有微秒级开销（Lab 07b 实测只跑到带宽下界的一成左右，约 7\%\textasciitilde{}14\%） & Lab 07b 练习 5 \\
+融合的注意力 kernel（FlashAttention / FlashInfer） & 第 9 篇 & Lab 09 \\
+量化（权重 / KV Cache） & 显存与带宽 & Lab 11、第 11 篇 \\
+投机解码 & Decode 串行、算力闲置 & Lab 10、第 10 篇 \\
+张量并行 / 专家并行 & 单卡放不下 & 第 13 篇、Lab 13 \\
+结构化输出（JSON Schema 约束解码） & 让输出满足格式 & 第 7 篇的延伸：对 logits 做掩码 \\
+多 LoRA 服务 & 一个基座模型服务多个微调版本 & 选读 S-LoRA \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[OK] 本篇自测}
+
+\begin{enumerate}
+  \item TTFT 和 TPOT 分别由什么决定？为什么服务要看 P99 而不只看平均？
+  \item 用 Little 定律估算：每秒 5 个请求、每个请求平均耗时 20 秒、平均上下文 4K、每 token KV 128 KB，需要多少 KV Cache 显存？
+  \item 预留连续显存为什么会浪费？PagedAttention 每个请求最多浪费多少？
+  \item 为什么说 Online Softmax（第 9 篇）是 PagedAttention 的数学前提？
+  \item 写时复制在什么时候触发？
+  \item 为什么把"当前时间"写在系统提示词开头会破坏前缀缓存？
+  \item 一个长 Prefill 为什么会让所有正在 Decode 的请求卡顿？Chunked Prefill 如何解决？为什么说它让"两种瓶颈互补"？
+\end{enumerate}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[资料] 外部资源}
+
+\begin{itemize}
+  \item Kwon et al. 2023：\href{https://arxiv.org/abs/2309.06180}{Efficient Memory Management for LLM Serving with PagedAttention}（vLLM 论文，\textbf{必读}），以及 \href{https://blog.vllm.ai/2023/06/20/vllm.html}{vLLM 博客}
+  \item Yu et al. 2022：\href{https://www.usenix.org/conference/osdi22/presentation/yu}{Orca: A Distributed Serving System for Transformer-Based Generative Models}（OSDI'22，迭代级调度）
+  \item Anyscale 博客：\href{https://www.anyscale.com/blog/continuous-batching-llm-inference}{How continuous batching enables 23x throughput in LLM inference}
+  \item Zheng et al. 2023：\href{https://arxiv.org/abs/2312.07104}{SGLang (RadixAttention)}
+  \item Agrawal et al. 2023/2024：\href{https://arxiv.org/abs/2308.16369}{Sarathi}、\href{https://arxiv.org/abs/2403.02310}{Sarathi-Serve (Chunked Prefill)}
+  \item Zhong et al. 2024：\href{https://arxiv.org/abs/2401.09670}{DistServe (P/D 分离)}；Qin et al. 2024：\href{https://arxiv.org/abs/2407.00079}{Mooncake}
+  \item vLLM 官方文档：\href{https://docs.vllm.ai/}{docs.vllm.ai} 中的 Design / Architecture 部分
+  \item Lilian Weng：\href{https://lilianweng.github.io/posts/2023-01-10-inference-optimization/}{Large Transformer Model Inference Optimization}（推理优化综述）
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\textbf{上一篇}：\textbf{第 11 篇：量化：从每位 6 dB 到 SmoothQuant、AWQ 与 GPTQ} ｜ \textbf{下一篇}：\textbf{第 13 篇：多卡并行推理：张量并行、流水线并行与专家并行} ｜ \textbf{总路线}：\textbf{LEARNING\_PATH.md}

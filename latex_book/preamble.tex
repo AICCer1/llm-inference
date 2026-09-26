@@ -1,0 +1,210 @@
+% ==============================================================================
+% 大模型推理系统与核心原理：从零基础到工业实战
+% LaTeX 宏包与排版样式配置文件 (preamble.tex)
+% ==============================================================================
+
+\usepackage{geometry}
+\geometry{
+  a4paper,
+  left=2.5cm,
+  right=2.5cm,
+  top=2.8cm,
+  bottom=2.8cm,
+  headheight=15pt,
+  footskip=25pt
+}
+
+% ------------------------------------------------------------------------------
+% 字体配置 (针对 Ubuntu / Debian Noto CJK 及 DejaVu)
+% ------------------------------------------------------------------------------
+\usepackage{fontspec}
+\setCJKmainfont[BoldFont=Noto Serif CJK SC Bold]{Noto Serif CJK SC}
+\setCJKsansfont[BoldFont=Noto Sans CJK SC Bold]{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans Mono CJK SC}
+\setmonofont{DejaVu Sans Mono}
+
+% ------------------------------------------------------------------------------
+% 数学公式宏包
+% ------------------------------------------------------------------------------
+\usepackage{amsmath,amssymb,amsfonts,mathtools,bm}
+
+% ------------------------------------------------------------------------------
+% 表格与图形
+% ------------------------------------------------------------------------------
+\usepackage{booktabs,tabularx,array,colortbl,caption}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc,backgrounds,fit}
+
+% ------------------------------------------------------------------------------
+% 颜色系统定义
+% ------------------------------------------------------------------------------
+\usepackage{xcolor}
+\definecolor{primary}{RGB}{18, 67, 109}       % 经典海军蓝
+\definecolor{secondary}{RGB}{0, 122, 135}     % 科技青
+\definecolor{accent}{RGB}{217, 83, 30}        % 强调橙
+\definecolor{darktext}{RGB}{33, 37, 41}       % 主文本深灰
+\definecolor{lightbg}{RGB}{248, 249, 250}     % 浅灰代码背景
+\definecolor{boxborder}{RGB}{220, 224, 230}   % 边框灰
+\definecolor{tipgreen}{RGB}{40, 135, 78}      % 技巧绿
+\definecolor{warnred}{RGB}{192, 57, 43}       % 警告红
+\definecolor{mathpurple}{RGB}{108, 52, 131}   % 定理紫
+
+% 代码语法高亮颜色
+\definecolor{codegreen}{RGB}{34, 139, 34}
+\definecolor{codegray}{RGB}{110, 115, 120}
+\definecolor{codepurple}{RGB}{140, 40, 140}
+\definecolor{codeblue}{RGB}{10, 60, 170}
+
+% ------------------------------------------------------------------------------
+% Listings 工业级代码高亮配置
+% ------------------------------------------------------------------------------
+\usepackage{listings}
+\usepackage{xeCJK-listings}
+
+\lstset{
+  basicstyle=\footnotesize\ttfamily,
+  breaklines=true,
+  breakatwhitespace=false,
+  breakautoindent=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=single,
+  rulecolor=\color{boxborder},
+  backgroundcolor=\color{lightbg},
+  keywordstyle=\color{codeblue}\bfseries,
+  commentstyle=\color{codegray}\itshape,
+  stringstyle=\color{codegreen},
+  numbers=left,
+  numberstyle=\tiny\color{codegray},
+  numbersep=7pt,
+  stepnumber=1,
+  tabsize=4,
+  captionpos=t,
+  abovecaptionskip=6pt,
+  belowcaptionskip=4pt,
+  xleftmargin=1.2em,
+  framexleftmargin=1.2em
+}
+
+% ------------------------------------------------------------------------------
+% 彩色提示框 (tcolorbox)
+% ------------------------------------------------------------------------------
+\usepackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+
+% 1. 背景介绍与导读框
+\newtcolorbox{noteBox}[1][导读与背景]{
+  enhanced, breakable,
+  colback=primary!3!white,
+  colframe=primary,
+  arc=2mm, boxrule=0.8pt,
+  fonttitle=\bfseries\sffamily,
+  coltitle=white, colbacktitle=primary,
+  title={#1},
+  top=3mm, bottom=3mm, left=4mm, right=4mm
+}
+
+% 2. 核心直觉与物理意义框
+\newtcolorbox{tipBox}[1][核心直觉与思考]{
+  enhanced, breakable,
+  colback=tipgreen!3!white,
+  colframe=tipgreen,
+  arc=2mm, boxrule=0.8pt,
+  fonttitle=\bfseries\sffamily,
+  coltitle=white, colbacktitle=tipgreen,
+  title={#1},
+  top=3mm, bottom=3mm, left=4mm, right=4mm
+}
+
+% 3. 避坑指南与警告框
+\newtcolorbox{warningBox}[1][注意事项与避坑指南]{
+  enhanced, breakable,
+  colback=warnred!3!white,
+  colframe=warnred,
+  arc=2mm, boxrule=0.8pt,
+  fonttitle=\bfseries\sffamily,
+  coltitle=white, colbacktitle=warnred,
+  title={#1},
+  top=3mm, bottom=3mm, left=4mm, right=4mm
+}
+
+% 4. 数学定理与证明框
+\newtcolorbox{mathBox}[1][数学推导与严格证明]{
+  enhanced, breakable,
+  colback=mathpurple!3!white,
+  colframe=mathpurple,
+  arc=2mm, boxrule=0.8pt,
+  fonttitle=\bfseries\sffamily,
+  coltitle=white, colbacktitle=mathpurple,
+  title={#1},
+  top=3mm, bottom=3mm, left=4mm, right=4mm
+}
+
+% ------------------------------------------------------------------------------
+% 页面页眉页脚
+% ------------------------------------------------------------------------------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\small\sffamily\thepage}
+\fancyhead[RE]{\small\sffamily\color{primary}\nouppercase{\leftmark}}
+\fancyhead[LO]{\small\sffamily\color{secondary}\nouppercase{\rightmark}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyfoot[C]{\small\sffamily\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+}
+
+% ------------------------------------------------------------------------------
+% 标题与章节样式定制 (ctexset)
+% ------------------------------------------------------------------------------
+\ctexset{
+  part = {
+    format = \Huge\bfseries\sffamily\centering\color{primary},
+    pagestyle = empty
+  },
+  chapter = {
+    format = \huge\bfseries\sffamily\color{primary},
+    name = {第, 章},
+    number = \arabic{chapter},
+    beforeskip = 15pt,
+    afterskip = 25pt
+  },
+  section = {
+    format = \Large\bfseries\sffamily\color{primary},
+    beforeskip = 18pt,
+    afterskip = 10pt
+  },
+  subsection = {
+    format = \large\bfseries\sffamily\color{secondary},
+    beforeskip = 14pt,
+    afterskip = 8pt
+  },
+  subsubsection = {
+    format = \normalsize\bfseries\sffamily,
+    beforeskip = 10pt,
+    afterskip = 6pt
+  }
+}
+
+% ------------------------------------------------------------------------------
+% 超链接与书签
+% ------------------------------------------------------------------------------
+\usepackage{hyperref}
+\usepackage{bookmark}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=primary,
+  citecolor=tipgreen,
+  urlcolor=secondary,
+  pdfborder={0 0 0},
+  pdftitle={大模型推理系统与核心原理：从零基础到工业实战},
+  pdfauthor={sharp-volta AI System Learning Project},
+  pdfsubject={Large Language Model Inference, Systems, CUDA, Attention, Quantization},
+  pdfkeywords={LLM, Inference, KV Cache, FlashAttention, Speculative Decoding, PagedAttention, Tensor Parallelism}
+}

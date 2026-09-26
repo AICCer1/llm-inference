@@ -1,0 +1,55 @@
+\chapter{多卡张量并行（Tensor Parallelism）切分与 All-Reduce 仿真}
+
+\section{Lab 13：多卡并行推理仿真}
+
+\begin{noteBox}[核心导读与背景]
+对应理论：\textbf{第 13 篇：多卡并行推理——张量并行、流水线并行与专家并行}
+前置：第 3 篇（矩阵乘形状）、第 8 篇（带宽与耗时模型）。
+依赖：NumPy。不需要真的有多张显卡——用列表里的多个数组模拟多张卡，重点是看清"切法"的数学。
+\end{noteBox}
+
+\begin{noteBox}[核心导读与背景]
+{}[计时] 以下计时类数字是本机某一次运行的\textbf{量级示例}（显卡空闲、已预热）。它是\textbf{第 8 篇耗时模型的推算}，不是真实 kernel 的实测，请看趋势和比例。
+\end{noteBox}
+
+\section{运行}
+
+\begin{lstlisting}[language=bash]
+.venv/bin/python lab13_parallelism/tensor_parallel_sim.py
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3.5cm} X}
+\toprule
+\textbf{实验} & \textbf{结果} \\
+\midrule
+1. TP SwiGLU（先列后行） & TP=2/4/8 与单卡误差 \textasciitilde{}1e-15，每卡权重 1/n \\
+2. 反例（先行切） & 在部分和上做 SiLU，相对误差 \textbf{52\%}；要算对必须多一次通信 \\
+3. TP 注意力（按头切） & 与单卡一致，每卡只存 1/n 的 KV Cache \\
+4. Ring All-Reduce & 每卡发送 $2(n-1)/n$ 倍数据：2 卡 1.0、4 卡 1.5、8 卡 1.75 \\
+5. 70B Decode 延迟模型 & NVLink TP=8 约 6.9x；PCIe TP=8 约 4.9x（通信占近 40\%）；PP 不降延迟 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{动手练习}
+
+\begin{enumerate}
+  \item 在实验 3 中实现 GQA（8 个 Q 头、2 个 KV 头）+ TP=4：KV 头少于卡数时，每个 KV 头要复制到哪几张卡上？KV Cache 总占用变成多少？
+  \item 给实验 5 加上 batch 维度：batch=64 时每次 All-Reduce 的数据量变成多少？通信是否从"延迟主导"变成"带宽主导"？
+  \item 模拟专家并行：8 个专家分到 4 张卡，随机路由 1024 个 token（top-2），统计每张卡收到的 token 数，计算最忙的卡比平均多多少（负载不均衡）。再让路由分布偏向少数专家，看看会怎样。
+  \item 用实验 4 的环形结构实现 Ring Attention：每张卡持有一段 KV，环形传递 KV 块，用第 9 篇的合并公式累加，验证与完整注意力一致。
+\end{enumerate}
+
+
+
+\section{实验核心源码精选与解析}
+
+本实验配套有完整可运行的工业级验证代码，重点实现细节如下：
+
+
+\subsection{源码实现：\texttt{tensor\_parallel\_sim.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{tensor\_parallel\_sim.py}}]{code/lab13_parallelism_tensor_parallel_sim.py}
+

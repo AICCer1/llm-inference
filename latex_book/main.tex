@@ -1,0 +1,75 @@
+\documentclass[11pt,a4paper,openany,UTF8]{ctexbook}
+\input{preamble.tex}
+
+\begin{document}
+
+% ----------------------------------------------------------------------
+% 封面设计
+% ----------------------------------------------------------------------
+\begin{titlepage}
+\centering
+\vspace*{2.5cm}
+{\Huge\bfseries\sffamily\color{primary} 大模型推理系统与核心原理}\\[0.6cm]
+{\LARGE\sffamily\color{secondary} 从零基础数学推导到现代工业工程落地}\\[1.2cm]
+{\large\sffamily\color{darktext} 深入自注意力、KV Cache、Roofline 模型、FlashAttention、量化与分布式并行}\\[2.5cm]
+
+\begin{tcolorbox}[enhanced, width=0.88\textwidth, colback=primary!5!white, colframe=primary, arc=3mm, boxrule=1pt, center]
+\centering\sffamily\small
+\textbf{涵盖 14 篇系统理论全景推导 + 14 组完整可运行实验源码精解}\\[0.3cm]
+Transformer $\cdot$ RoPE $\cdot$ SwiGLU $\cdot$ GQA/MLA $\cdot$ PagedAttention $\cdot$ Speculative Decoding $\cdot$ Tensor Parallelism
+\end{tcolorbox}
+
+\vfill
+{\large\sffamily sharp-volta 开源系统学习工程组 编著}\\[0.3cm]
+{\small\sffamily 2026 年 9 月 $\cdot$ 第一版}
+\vspace*{1.5cm}
+\end{titlepage}
+
+% ----------------------------------------------------------------------
+% 前言与目录
+% ----------------------------------------------------------------------
+\frontmatter
+\pagestyle{plain}
+\include{chapters/preface}
+\tableofcontents
+\cleardoublepage
+
+% ----------------------------------------------------------------------
+% 正文主体
+% ----------------------------------------------------------------------
+\mainmatter
+\pagestyle{fancy}
+
+\part{核心原理与数学推导篇 (Theory \& Derivations)}
+\include{chapters/ch00}
+\include{chapters/ch01}
+\include{chapters/ch02}
+\include{chapters/ch03}
+\include{chapters/ch04}
+\include{chapters/ch05}
+\include{chapters/ch06}
+\include{chapters/ch07}
+\include{chapters/ch08}
+\include{chapters/ch09}
+\include{chapters/ch10}
+\include{chapters/ch11}
+\include{chapters/ch12}
+\include{chapters/ch13}
+
+\part{工业实战与实验源码精解篇 (Practical Labs \& Implementations)}
+\include{labs/lab00}
+\include{labs/lab01}
+\include{labs/lab02}
+\include{labs/lab03}
+\include{labs/lab04}
+\include{labs/lab05}
+\include{labs/lab06}
+\include{labs/lab07}
+\include{labs/lab08}
+\include{labs/lab09}
+\include{labs/lab10}
+\include{labs/lab11}
+\include{labs/lab12}
+\include{labs/lab13}
+
+\end{document}

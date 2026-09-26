@@ -1,0 +1,120 @@
+\chapter{从零训练与推理最小完整 Llama 模型}
+
+\section{Lab 05：亲手训练一个迷你 Llama，再在它身上做推理}
+
+\begin{warningBox}[避坑指南与核心警示]
+对应理论：第 4 篇（注意力公式）、第 6 篇（KV Cache）、第 7 篇（采样）、第 3 篇（交叉熵 / 困惑度 / Adam）、第 5 篇（RMSNorm、RoPE、SwiGLU、GQA、Pre-LN）
+前置：完成 Lab 03（你已经亲手写过反向传播，所以这里可以放心用 \texttt{loss.backward()}）。
+依赖：PyTorch（见根目录 \texttt{requirements.txt}，RTX 50 系必须装 cu128 版本）。
+\end{warningBox}
+
+\section{为什么需要这个模块？}
+
+\texttt{lab04\_transformer\_microscope} 和 \texttt{lab06\_kv\_cache} 用的都是\textbf{随机权重}，输出没有任何意义。
+这里你会得到一个\textbf{真正学过东西}的模型（虽然很小），然后在它身上验证推理理论——这样"KV Cache 输出完全一致""温度越高越胡说"这些结论就不再是抽象描述。
+
+\section{文件}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3.5cm} X}
+\toprule
+\textbf{文件} & \textbf{内容} \\
+\midrule
+{}\textbf{\texttt{model.py}} & 约 180 行的 Llama 架构：RMSNorm、RoPE（半分配对，与 HF 一致）、GQA、因果掩码、SwiGLU、Pre-LN、KV Cache。每个组件的注释都标注了对应的教程章节 \\
+{}\textbf{\texttt{train.py}} & 用本仓库的教程 Markdown 做语料，字符级训练；包含"初始损失 $\approx$ ln V"检查、验证集 PPL、early stopping \\
+{}\textbf{\texttt{generate.py}} & 朴素生成 vs KV Cache 逐 token 对拍；用真实缓存张量验证显存公式；逐步计时；采样策略对比 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{运行}
+
+\begin{lstlisting}[language=bash]
+.venv/bin/python lab05_train_tiny_llama/train.py      # GPU 约 0.5~1.5 分钟（取决于显卡时钟状态）
+.venv/bin/python lab05_train_tiny_llama/generate.py
+\end{lstlisting}
+
+\section{你会看到什么}
+
+以下结论都由脚本自己\textbf{断言}（不满足会直接报错），具体数值以运行输出为准：
+
+\begin{itemize}
+  \item 初始损失 $\approx$ ln(V) ——初始化正确。脚本会打印实测值和理论值，并断言两者相差 < 0.5。
+\end{itemize}
+
+  {}[注意] \textbf{V（字表大小）和下面所有 PPL 数字都会随仓库文档的增删而变}，因为语料就是本仓库的文档。
+  具体数值以你运行时打印的为准，这里只描述\textbf{形状}。
+\begin{itemize}
+  \item 验证集 PPL：从约 $V$（均匀瞎猜 = ln V）一路降到十几，随后\textbf{过拟合}：训练损失继续下降
+\end{itemize}
+
+  （默认 1000 步结束时约 0.4\textasciitilde{}0.5），验证损失却回升。3.5M 参数 vs 十几万字符，数据量只有
+  Chinchilla 比例的千分之一，模型开始背书——这正是第 5 篇讲规模定律时说的"参数和数据要匹配"。
+\begin{noteBox}[核心导读与背景]
+记住这条曲线的\textbf{形状}（先降后升、训练/验证分叉），不要记具体数字：
+评审实测中，同一份代码在语料增加 120 行后，最优 PPL 从 11.1 变成 14.3 —— 不是代码变了，
+是验证集的切分变了。\textbf{这也是"评测集必须冻结"这条工程常识的活例子。}
+\end{noteBox}
+
+\begin{itemize}
+  \item 朴素生成与 KV Cache 生成 400 个 token \textbf{完全一致}，logits 最大差 \textasciitilde{}1e-5
+  \item KV Cache 真实字节数 = 公式 $2 \times L \times n_{kv} \times d_{head} \times b \times T$，\textbf{逐字节相等}
+  \item 每步耗时（本机一次运行）：
+\end{itemize}
+
+\begin{noteBox}[核心导读与背景]
+{}[计时] 以下计时类数字是本机某一次运行的\textbf{量级示例}，前提是显卡空闲、已预热；GPU 降频或有其它负载时可能慢 40\% 以上。
+\textbf{CPU 列更不可靠}：CPU 首步有首次内存分配/缺页开销，且没有预热路径，实测可能与表里差 5 倍。
+请看\textbf{趋势和比例}（GPU 上 Cache 基本持平 vs 朴素线性增长），以你自己运行的输出为准。
+\end{noteBox}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{l X X X X }
+\toprule
+\textbf{上下文长度} & \textbf{朴素 (GPU)} & \textbf{Cache (GPU)} & \textbf{朴素 (CPU)} & \textbf{Cache (CPU)} \\
+\midrule
+11 & 3.1 ms & 3.3 ms & 3.4 ms & 1.9 ms \\
+210 & 4.1 ms & 3.1 ms & 10.6 ms & 3.4 ms \\
+409 & 3.9 ms & 4.7 ms & 37.2 ms & 2.5 ms \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+CPU 上完美呈现"朴素线性变慢、缓存持平"；GPU 上两者差不多——因为模型太小，\textbf{耗时被 kernel 启动等固定开销主导}（第 8 篇的 overhead 区间）。这是真实世界的现象，不是实验失败：它解释了为什么推理引擎要用 CUDA Graph，以及为什么 Lab 07b 要换成真实的大模型再测。
+
+\section{动手练习}
+
+\begin{enumerate}
+  \item 把 \texttt{n\_kv\_head} 改成 8（即 MHA）重新训练，比较参数量、KV Cache 大小和验证 PPL。
+  \item 在 \texttt{model.py} 里把 RoPE 去掉（\texttt{apply\_rope} 直接返回 \texttt{x}）重新训练，看验证 PPL 变差多少——对应 \texttt{lab04\_transformer\_microscope/02} 里"没有位置编码就是词袋"的实验。
+  \item 把 \texttt{SwiGLU} 换成 \texttt{ReLU(x W1) W2}，保持参数量相同（隐藏维度要改成多少？见第 5 篇 §5.3）。
+  \item 生成长度超过训练时的 \texttt{block=128} 后，文本质量有没有明显下降？这和第 5 篇 RoPE 外推的讨论有什么关系？
+  \item （进阶）把 \texttt{Attention.forward} 里的 \texttt{torch.cat} 缓存改成\textbf{预分配}一块 \texttt{[B, n\_kv, max\_len, hd]} 的张量、按位置写入，比较速度。这就是从"动态拼接"走向 PagedAttention（Lab 12b）的第一步。
+\end{enumerate}
+
+\section{下一步}
+
+{}\textbf{Lab 07b：不用 transformers 的模型类，亲手实现 Qwen2.5 的前向传播并与官方逐位对拍}
+
+
+\section{实验核心源码精选与解析}
+
+本实验配套有完整可运行的工业级验证代码，重点实现细节如下：
+
+
+\subsection{源码实现：\texttt{model.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{model.py}}]{code/lab05_train_tiny_llama_model.py}
+
+
+\subsection{源码实现：\texttt{train.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{train.py}}]{code/lab05_train_tiny_llama_train.py}
+
+
+\subsection{源码实现：\texttt{generate.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{generate.py}}]{code/lab05_train_tiny_llama_generate.py}
+

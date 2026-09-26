@@ -1,0 +1,63 @@
+\chapter{工业级文本采样策略实操 (Top-K / Top-P / Min-P)}
+
+\section{Lab 07a：采样策略显微镜}
+
+\begin{mathBox}[核心数学定理推导]
+对应理论：\textbf{第 7 篇：Logits、温度系数极限证明与采样算法}
+依赖：纯 Python 标准库。
+\end{mathBox}
+
+\section{运行}
+
+\begin{lstlisting}[language=bash]
+python3 lab07a_sampling/sampling_strategies.py
+\end{lstlisting}
+
+用一组固定的 Logits，逐一对比：原始分布、低温（T=0.2）、高温（T=2.0）、Top-K、Top-P、重复惩罚，打印每种策略处理后的概率分布条形图。
+
+\section{速查}
+
+模型 LM Head 输出的不是概率，而是一堆未经归一化的实数值，称为 \textbf{Logits}（例如 \texttt{[2.1, -0.5, 8.4, 0.1]}）。
+\begin{itemize}
+  \item \textbf{贪婪搜索（Greedy Search）}：
+\end{itemize}
+
+\[
+\text{next\_token} = \arg\max(\text{logits})
+\]
+
+  直接选得分最高的那一个（确定性强，但容易重复或死板）。
+\begin{itemize}
+  \item \textbf{温度系数（Temperature $T$）}：
+\end{itemize}
+
+\[
+\text{probs} = \text{softmax}\left(\frac{\text{logits}}{T}\right)
+\]
+
+\begin{itemize}
+  \item $T \to 0$：分布极度尖锐，退化为贪婪搜索；
+  \item $T > 1$：分布平缓，低分词也有机会被选中，回答更具创意但更容易胡说八道；
+  \item \textbf{Top-P（核采样 Nucleus Sampling）}：
+\end{itemize}
+
+  按概率从高到低排序累加，只保留累计概率达到 $P$（如 $0.9$）的头部候选词，截断长尾无意义低概率词，在多样性与合理性之间取得最佳平衡。
+
+\section{下一步}
+
+\begin{itemize}
+  \item 在\textbf{真正训练过的模型}上看采样效果：\textbf{Lab 05} 的 \texttt{generate.py} 实验 4；
+  \item 手写重复惩罚并与 Hugging Face 官方实现逐 token 对拍：\textbf{Lab 07b} 实验 5。
+\end{itemize}
+
+
+
+\section{实验核心源码精选与解析}
+
+本实验配套有完整可运行的工业级验证代码，重点实现细节如下：
+
+
+\subsection{源码实现：\texttt{sampling\_strategies.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{sampling\_strategies.py}}]{code/lab07a_sampling_sampling_strategies.py}
+

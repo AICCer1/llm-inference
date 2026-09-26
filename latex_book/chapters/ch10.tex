@@ -1,0 +1,150 @@
+\chapter{投机解码：无偏性证明与期望加速比}
+
+\begin{noteBox}[核心导读与背景]
+\textbf{阅读前须知}：Lab 10 给出了投机采样的算法与仿真，但最关键的"为什么"没有讲：它凭什么说"\textbf{输出分布与大模型完全一致}"？加速比能不能事先算出来？什么时候它反而不划算？
+
+\textbf{前置}：第 7 篇（采样）、第 8 篇（访存受限、拐点）。
+
+\textbf{配套实验}：\textbf{\texttt{lab10\_speculative\_decoding/verify\_unbiasedness.py}}——蒙特卡洛验证无偏性定理与期望加速比公式，并演示两种常见错误写法如何产生偏差。
+\end{noteBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[加速] 一、为什么"猜 K 个再一起验证"会更快？}
+
+第 8 篇推出：Decode 时线性层的算术强度约等于\textbf{这一步处理的 token 数}。batch=1 时一次只处理 1 个 token，GPU 算力利用率只有百分之一左右。
+如果让大模型\textbf{一次前向验证 K 个 token}，读的权重还是那一份，算术强度变成 K，只要 K 远小于拐点（5060 Ti 上约 130），\textbf{耗时几乎不变}。
+
+于是问题变成：\textbf{从哪里弄来 K 个"大概率正确"的候选 token？}——让一个小得多的草稿模型先猜。关键是：猜错了不能影响结果的正确性。
+
+\section{[几何] 二、单个 token 的无偏性定理}
+
+设在同一个前缀下，目标（大）模型给出分布 $p(x)$，草稿（小）模型给出分布 $q(x)$。算法：
+\begin{enumerate}
+  \item 从 $q$ 采样一个 token $x$；
+  \item 以概率 $\min\left(1, \frac{p(x)}{q(x)}\right)$ \textbf{接受} $x$；
+  \item 若拒绝，则从\textbf{残差分布} $r(x) = \frac{\max(0, \ p(x) - q(x))}{Z}$ 重新采样，其中 $Z = \sum_{x'} \max(0, \ p(x') - q(x'))$。
+\end{enumerate}
+
+（约定：若 $q(x) = 0$，草稿根本不会提出 $x$，第 2 步的比值不会被计算，所以不会出现除以 0。定理对 $q$ 唯一的要求是它是一个合法的概率分布。）
+
+\textbf{定理}：最终输出的 token 服从分布 $p$，与草稿模型 $q$ 的好坏无关。
+
+\textbf{证明}：输出 $x$ 有两种途径——草稿恰好是 $x$ 且被接受；或者草稿被拒绝、然后从残差分布抽中了 $x$。
+
+(1) 草稿是 $x$ 且被接受的概率：
+
+\[
+q(x) \cdot \min\left(1, \frac{p(x)}{q(x)}\right) = \min\big(q(x), \ p(x)\big)
+\]
+
+(2) 发生拒绝的总概率（对所有可能的草稿 token 求和）：
+
+\[
+P(\text{拒绝}) = 1 - \sum_{x'} \min(q(x'), p(x')) = \sum_{x'} \Big( p(x') - \min(q(x'), p(x')) \Big) = \sum_{x'} \max\big(0, \ p(x') - q(x')\big) = Z
+\]
+
+（第二个等号用了 $\sum_{x'} p(x') = 1$；第三个等号是因为 $p - \min(p, q) = \max(0, p - q)$。）
+
+(3) 拒绝后从残差分布抽中 $x$ 的概率：
+
+\[
+P(\text{拒绝}) \cdot r(x) = Z \cdot \frac{\max(0, \ p(x) - q(x))}{Z} = \max\big(0, \ p(x) - q(x)\big)
+\]
+
+两条途径相加：
+
+\[
+P(\text{输出} = x) = \min\big(q(x), p(x)\big) + \max\big(0, \ p(x) - q(x)\big) = p(x) \quad \blacksquare
+\]
+
+（最后一步分两种情况验证：若 $p(x) \le q(x)$，是 $p(x) + 0$；若 $p(x) > q(x)$，是 $q(x) + p(x) - q(x)$。若 $Z = 0$，说明 $p = q$，永远不会拒绝，结论同样成立。）
+
+\textbf{直觉}：草稿"猜多了"的地方（$q > p$）按比例拒掉，"猜少了"的地方（$p > q$）由残差分布精确补上。
+
+\section{[链接] 三、推广到 K 个 token}
+
+草稿模型自回归地猜 $x_1, \dots, x_K$；大模型\textbf{一次前向}同时得到 $p(\cdot \mid \text{前缀})$、$p(\cdot \mid \text{前缀}, x_1)$、\dots{}\dots{}、$p(\cdot \mid \text{前缀}, x_1..x_K)$ 共 $K+1$ 个分布。然后\textbf{从左到右}逐个用第二节的规则检验：
+\begin{itemize}
+  \item 第 $i$ 个被接受 $\rightarrow$ 继续检验第 $i+1$ 个；
+  \item 第 $i$ 个被拒绝 $\rightarrow$ 从残差分布采样一个 token 替代它，\textbf{丢弃后面所有草稿}，本轮结束；
+  \item $K$ 个全部被接受 $\rightarrow$ 用已经算好的第 $K+1$ 个分布\textbf{免费再采样一个} token。
+\end{itemize}
+
+由于每个位置都在"正确的前缀"下应用了单 token 定理，按位置归纳可得：\textbf{整段输出的联合分布与大模型逐个 token 自回归采样完全一致}。
+
+\begin{noteBox}[核心导读与背景]
+贪婪解码（温度 0）是特例：$p$ 是 one-hot，接受规则退化为"草稿 token 等于大模型的 argmax 才接受"。
+\end{noteBox}
+
+\section{[增长] 四、期望加速比公式}
+
+设每个草稿 token 的\textbf{接受率}为 $\alpha$（假设各位置独立同分布）。由第二节，
+
+\[
+\alpha = \sum_x \min(p(x), q(x)) = 1 - \text{TV}(p, q)
+\]
+
+其中 TV 是两个分布的\textbf{总变差距离}——草稿越像目标，接受率越高。
+
+一轮能产出多少 token？"至少前 $i$ 个草稿都被接受"的概率是 $\alpha^i$，每轮还一定会多出 1 个 token（要么是拒绝后的替代 token，要么是全接受后的免费 token）：
+
+\[
+\mathbb{E}[\text{每轮产出}] = 1 + \sum_{i=1}^{K} \alpha^i = \frac{1 - \alpha^{K+1}}{1 - \alpha}
+\]
+
+设草稿模型单步耗时与大模型单步耗时之比为 $c$（$c < 1$，例如 $c = 0.1$ 即十分之一），一轮耗时 $= K c \, T + T$（K 次草稿 + 1 次验证）。相对于大模型逐个生成（每 token 耗时 $T$）的加速比：
+
+\[
+\text{加速比} = \frac{1 - \alpha^{K+1}}{(1 - \alpha)(Kc + 1)}
+\]
+
+例：$\alpha = 0.8$、$K = 4$、$c = 0.1$：期望每轮产出 $\frac{1 - 0.8^5}{0.2} \approx 3.36$，加速比 $\frac{3.36}{1.4} \approx 2.4$ 倍。
+
+\textbf{两个重要推论}：
+\begin{enumerate}
+  \item $K$ 不是越大越好：$\alpha^i$ 衰减很快，而草稿成本随 $K$ 线性增加，存在最优 $K$（配套实验会扫描出来）。
+  \item \textbf{batch 越大，投机解码越不划算}：它的前提是"验证 K 个 token 和验证 1 个一样快"，而 batch 很大时 Decode 本身已接近拐点（第 8 篇），多验证的 token 不再免费。所以投机解码主要用于\textbf{低延迟、小 batch} 的场景。
+\end{enumerate}
+
+\section{[启蒙] 五、演进}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3.5cm} X}
+\toprule
+\textbf{方法} & \textbf{草稿从哪来} \\
+\midrule
+Blockwise Parallel Decoding（2018） & 模型自己加多个预测头（最早的思想） \\
+Speculative Decoding / Sampling（2022/2023） & 独立的小模型，并给出无偏性证明 \\
+Medusa（2024） & 在大模型上加几个轻量解码头，一次猜多个位置，用树形注意力并行验证多条候选 \\
+EAGLE（2024） & 在\textbf{特征层}（倒数第二层隐藏状态）上做自回归草稿，接受率更高 \\
+Prompt Lookup / N-gram & 直接从提示词里找重复片段当草稿（代码编辑、摘要中效果很好），零成本 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[OK] 本篇自测}
+
+\begin{enumerate}
+  \item 写出投机采样单 token 无偏性的完整证明。关键的两步等式各用到了什么？
+  \item 接受率 $\alpha$ 与总变差距离是什么关系？
+  \item 推导每轮期望产出 token 数 $\frac{1-\alpha^{K+1}}{1-\alpha}$。为什么 batch 大时投机解码收益变小？
+  \item "拒绝后直接从 $p$ 重新采样"为什么是错的？（提示：Lab 10 实验 3）
+\end{enumerate}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[资料] 外部资源}
+
+\textbf{投机采样}
+\begin{itemize}
+  \item Leviathan et al. 2022：\href{https://arxiv.org/abs/2211.17192}{Fast Inference from Transformers via Speculative Decoding}；Chen et al. 2023：\href{https://arxiv.org/abs/2302.01318}{Accelerating LLM Decoding with Speculative Sampling}（两篇独立提出，证明方式与本篇一致）
+  \item Stern et al. 2018：\href{https://arxiv.org/abs/1811.03115}{Blockwise Parallel Decoding}；Cai et al. 2024：\href{https://arxiv.org/abs/2401.10774}{Medusa}；Li et al. 2024：\href{https://arxiv.org/abs/2401.15077}{EAGLE}
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\textbf{上一篇}：\textbf{第 9 篇：FlashAttention：Online Softmax 的严格推导与 IO 复杂度} ｜ \textbf{下一篇}：\textbf{第 11 篇：量化：从每位 6 dB 到 SmoothQuant、AWQ 与 GPTQ} ｜ \textbf{总路线}：\textbf{LEARNING\_PATH.md}

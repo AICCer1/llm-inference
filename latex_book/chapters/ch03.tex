@@ -1,0 +1,386 @@
+\chapter{神经网络如何学习：导数、链式法则、反向传播与交叉熵}
+
+\begin{mathBox}[核心数学定理推导]
+\textbf{阅读前须知}：第 1 篇用"拧旋钮"的比喻讲了神经网络怎么学习，但没有真正推导；下一篇（第 4 篇）讲 Transformer 时，还要用到 Softmax 的导数 $p_i(\delta_{ij} - p_j)$。本篇把"学习"这件事从数学上彻底讲透：导数到底是什么、为什么梯度指向下山方向、反向传播为什么比别的求导方法快几十亿倍、损失函数为什么偏偏是交叉熵、以及 Sigmoid / RNN 的梯度为什么会消失。
+
+\textbf{前置知识}：会求 $x^2$、$e^x$、$\ln x$ 的导数即可（高中水平）。如果对"导数是什么"本身没有直觉，先看 \href{https://www.3blue1brown.com/topics/calculus}{3Blue1Brown《微积分的本质》} 第 1\textasciitilde{}4 集，再回来。
+
+\textbf{配套实验}：\textbf{\texttt{lab03\_autograd\_from\_scratch/micrograd\_from\_scratch.py}}——用约 350 行纯 Python 实现一个自动求导引擎，并用数值差分验证本篇的每一个公式。
+\end{mathBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[重点] 一、导数：函数在一点附近的"最佳线性近似"}
+
+很多人记得导数是"切线斜率"，但在深度学习里更有用的理解是：
+
+\[
+f(x + h) \approx f(x) + f'(x) \cdot h \qquad (h \text{ 很小})
+\]
+
+\textbf{导数告诉你：输入挪动一点点 $h$，输出大约挪动 $f'(x) \cdot h$。} 它是一个"灵敏度"。
+
+多元函数 $f(x_1, \dots, x_n)$ 同理，每个输入各有一个灵敏度，称为\textbf{偏导数} $\frac{\partial f}{\partial x_i}$，把它们排成向量就是\textbf{梯度}：
+
+\[
+\nabla f = \left[\frac{\partial f}{\partial x_1}, \dots, \frac{\partial f}{\partial x_n}\right], \qquad f(\vec{x} + \vec{h}) \approx f(\vec{x}) + \nabla f \cdot \vec{h}
+\]
+
+\subsection{为什么梯度的反方向就是"下山最快"的方向？（严格证明）}
+
+设我们沿单位方向 $\vec{u}$（$|\vec{u}| = 1$）走一小步 $\epsilon$，函数变化量约为：
+
+\[
+f(\vec{x} + \epsilon\vec{u}) - f(\vec{x}) \approx \epsilon \, (\nabla f \cdot \vec{u})
+\]
+
+由第 2 篇的点积几何公式 $\nabla f \cdot \vec{u} = |\nabla f| \, |\vec{u}| \cos\theta = |\nabla f| \cos\theta$：
+\begin{itemize}
+  \item $\theta = 0$（沿梯度方向）时增长最快，增量 $= \epsilon |\nabla f|$；
+  \item $\theta = 180°$（沿\textbf{负梯度}方向）时下降最快，减量 $= \epsilon |\nabla f|$。 $\blacksquare$
+\end{itemize}
+
+于是得到\textbf{梯度下降}（Gradient Descent）更新规则，$\eta$ 叫学习率：
+
+\[
+\theta \leftarrow \theta - \eta \, \nabla_\theta \mathcal{L}
+\]
+
+\begin{tipBox}[核心直觉与思考]
+{}[思考] \textbf{为什么学习率不能太大？} 因为上面整个推导依赖"$f(x+h) \approx f(x) + f'(x)h$"这个\textbf{一阶近似}，只在 $h$ 很小时成立。步子一大，近似失效，损失反而可能上升甚至发散。
+\end{tipBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[链接] 二、链式法则：误差如何"顺藤摸瓜"找到每个旋钮}
+
+\subsection{单变量链式法则}
+
+若 $y = g(x)$，$L = f(y)$，则：
+
+\[
+\frac{dL}{dx} = \frac{dL}{dy} \cdot \frac{dy}{dx}
+\]
+
+用"灵敏度"理解：$x$ 动一点 $\rightarrow$ $y$ 动 $\frac{dy}{dx}$ 倍 $\rightarrow$ $L$ 再动 $\frac{dL}{dy}$ 倍，\textbf{灵敏度沿路径相乘}。
+
+\subsection{多变量链式法则：多条路径要相加}
+
+若 $x$ 同时影响了 $y_1$ 和 $y_2$，而 $L$ 依赖 $y_1, y_2$：
+
+\[
+\frac{\partial L}{\partial x} = \frac{\partial L}{\partial y_1}\frac{\partial y_1}{\partial x} + \frac{\partial L}{\partial y_2}\frac{\partial y_2}{\partial x}
+\]
+
+\textbf{规则只有两条：同一条路径上相乘，不同路径之间相加。} 这就是反向传播的全部数学。
+
+\subsection{手算一个完整例子}
+
+模型 $\hat{y} = w x + b$，损失 $L = (\hat{y} - y)^2$。取 $x = 2, \ w = 3, \ b = 1, \ y = 10$：
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3cm} p{4.5cm} X}
+\toprule
+\textbf{步骤} & \textbf{前向（从左到右算值）} & \textbf{反向（从右到左算梯度）} \\
+\midrule
+$u = w x$ & $u = 6$ & $\frac{\partial L}{\partial w} = \frac{\partial L}{\partial u} \cdot x = -6 \times 2 = \mathbf{-12}$ \\
+$\hat{y} = u + b$ & $\hat{y} = 7$ & $\frac{\partial L}{\partial u} = \frac{\partial L}{\partial \hat{y}} \cdot 1 = -6$，$\frac{\partial L}{\partial b} = -6 \times 1 = \mathbf{-6}$ \\
+$e = \hat{y} - y$ & $e = -3$ & $\frac{\partial L}{\partial \hat{y}} = \frac{\partial L}{\partial e} \cdot 1 = -6$ \\
+$L = e^2$ & $L = 9$ & $\frac{\partial L}{\partial e} = 2e = -6$ \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+梯度 $\frac{\partial L}{\partial w} = -12 < 0$：说明把 $w$ 调大，损失会下降。取 $\eta = 0.01$，$w \leftarrow 3 - 0.01 \times (-12) = 3.12$。预测值从 7 向 10 靠近了。
+\textbf{你可以在配套实验里用代码逐行复现这张表。}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[加速] 三、反向传播：为什么它能让训练百亿参数成为可能？}
+
+"对每个参数求偏导"有很多种做法，为什么全世界都用反向传播（Backpropagation，本质是\textbf{反向模式自动微分 Reverse-mode AD}）？
+
+\subsection{方案 A：数值差分（最笨）}
+
+\[
+\frac{\partial L}{\partial \theta_i} \approx \frac{L(\theta + h e_i) - L(\theta - h e_i)}{2h}
+\]
+
+每个参数要跑 2 次前向。一个 7B 模型就要跑 140 亿次前向才能得到\textbf{一次}梯度——完全不可行。（但它是\textbf{检验}梯度实现是否写对的金标准，配套实验里会用到。）
+
+\subsection{方案 B：前向模式（Forward-mode AD）}
+
+从输入往输出推"每个输入对当前节点的灵敏度"。代价与\textbf{输入个数}成正比——对参数有几十亿、输出只有 1 个标量损失的神经网络，依然要几十亿次。
+
+\subsection{方案 C：反向模式（Backpropagation）[OK]}
+
+从唯一的输出 $L$ 出发，反向计算 $\frac{\partial L}{\partial (\text{每个中间节点})}$。每个节点的梯度只需要它"下游"节点的梯度（已算好，直接复用）乘以局部导数，这就是\textbf{动态规划}。
+\textbf{一次反向传播就得到全部参数的梯度，代价只是前向的约 2 倍。}
+
+\begin{noteBox}[核心导读与背景]
+{}[文献] \textbf{历史}：反向模式自动微分在 1970 年由 Linnainmaa 提出；1986 年 Rumelhart、Hinton、Williams 在《Nature》上把它用于多层神经网络并展示了隐藏层能学到有意义的表示，这才让 MLP 真正可训练（第 0 篇族谱里的"1986 BP 算法"）。
+\end{noteBox}
+
+\subsection{一个对推理工程师很重要的推论：训练 \texorpdfstring{$\approx$}{≈} 6N，推理 \texorpdfstring{$\approx$}{≈} 2N}
+
+\begin{itemize}
+  \item 一个参数量为 $N$ 的模型，处理 1 个 token 的前向，每个参数参与\textbf{一次乘法 + 一次加法} $\rightarrow$ 约 $2N$ FLOPs。
+  \item 反向传播要对"激活"和"权重"各求一次梯度（见下一节的 $G W^T$ 与 $X^T G$），约 $4N$ FLOPs。
+  \item 所以训练每个 token 约 $6N$ FLOPs，\textbf{推理每个 token 约 $2N$ FLOPs}（不计注意力的 $O(\text{上下文长度})$ 项）。第 8 篇会用这个数字来估算 Prefill 的耗时。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[推导] 四、矩阵形式的反向传播：只需记住一个公式}
+
+神经网络里 99\% 的计算是矩阵乘法 $Y = XW$（$X: [B, K]$，$W: [K, N]$，$Y: [B, N]$）。
+设上游已经传来了 $G = \frac{\partial L}{\partial Y}$（形状同 $Y$，$[B, N]$），求 $\frac{\partial L}{\partial W}$ 与 $\frac{\partial L}{\partial X}$。
+
+\textbf{逐元素推导}：$Y_{ij} = \sum_k X_{ik} W_{kj}$，所以 $W_{kj}$ 影响了第 $j$ 列所有的 $Y_{ij}$（$i = 1..B$，多条路径相加）：
+
+\[
+\frac{\partial L}{\partial W_{kj}} = \sum_i \frac{\partial L}{\partial Y_{ij}} \frac{\partial Y_{ij}}{\partial W_{kj}} = \sum_i G_{ij} X_{ik} = (X^T G)_{kj}
+\]
+
+同理 $X_{ik}$ 影响了第 $i$ 行所有的 $Y_{ij}$：
+
+\[
+\frac{\partial L}{\partial X_{ik}} = \sum_j G_{ij} W_{kj} = (G W^T)_{ik}
+\]
+
+\[
+\boxed{\ \frac{\partial L}{\partial W} = X^T G, \qquad \frac{\partial L}{\partial X} = G W^T\ }
+\]
+
+\begin{noteBox}[核心导读与背景]
+{}[工具] \textbf{形状对齐记忆法}：$\frac{\partial L}{\partial W}$ 必须和 $W$ 同形状 $[K, N]$，手上只有 $X: [B, K]$ 和 $G: [B, N]$，唯一能拼出 $[K, N]$ 的写法就是 $X^T G$。
+
+{}[思考] \textbf{一个会在推理里反复出现的事实}：$\frac{\partial L}{\partial W} = X^T G$ 需要前向时的输入 $X$——这就是训练时必须\textbf{把每层激活值存下来}的原因（训练显存大头之一）。推理不做反向，所以激活用完即扔，这也是第 6 篇对比表中"训练显存杀手是激活值，推理显存杀手是 KV Cache"的根源。
+\end{noteBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[目标] 五、损失函数为什么是交叉熵？——最大似然估计}
+
+\subsection{语言模型的训练目标}
+
+回到第 1 篇的概率链式法则：一段文本的概率 $P(x_1, \dots, x_T) = \prod_t P(x_t \mid x_{<t})$。
+模型 $p_\theta$ 在每个位置输出一个词表上的分布。\textbf{我们希望模型给真实出现过的文本尽可能高的概率}，这就是\textbf{最大似然估计（MLE）}：
+
+\[
+\max_\theta \prod_{t=1}^{T} p_\theta(x_t \mid x_{<t})
+\]
+
+\subsection{为什么取对数、再取负号？}
+
+\begin{enumerate}
+  \item \textbf{连乘 $\rightarrow$ 连加}：几千个小于 1 的概率相乘会\textbf{下溢}成 0（float32 最小正数约 $10^{-45}$），取对数后变成求和，数值稳定；
+  \item $\log$ 单调递增，最大化 $\prod p$ 等价于最大化 $\sum \log p$；
+  \item 优化器习惯"最小化"，于是加负号：
+\end{enumerate}
+
+\[
+\mathcal{L}(\theta) = -\frac{1}{T}\sum_{t=1}^{T} \log p_\theta(x_t \mid x_{<t})
+\]
+
+这就是\textbf{负对数似然（NLL）}，也等于"真实分布（one-hot）与模型分布之间的\textbf{交叉熵}"：$H(y, p) = -\sum_i y_i \log p_i = -\log p_{\text{正确词}}$。
+
+\subsection{困惑度（Perplexity）：一个有物理含义的指标}
+
+\[
+\text{PPL} = \exp(\mathcal{L})
+\]
+
+\begin{itemize}
+  \item 如果模型对词表 $V$ 个词\textbf{完全均匀地瞎猜}，$p = 1/V$，$\mathcal{L} = \ln V$，$\text{PPL} = V$。
+  \item 所以 PPL 可以理解为"\textbf{模型平均在多少个词之间犹豫}"。PPL = 10 意味着模型的不确定性相当于每步从 10 个等可能的词里挑。
+\end{itemize}
+
+\begin{noteBox}[核心导读与背景]
+{}[工具] \textbf{调试黄金法则}（\textbf{Lab 05} 的 \texttt{train.py} 会真的断言它）：一个刚随机初始化的模型，初始损失应该约等于 $\ln V$。字符级小模型 $V \approx 1500$（\textbf{会随语料增删而变}，因为语料就是本仓库的文档），初始损失应 $\approx \ln 1500 \approx 7.3$。如果远大于这个值，说明初始化让模型"自信地瞎猜"，训练前就有 bug。
+
+{}[链接] \textbf{与推理的联系}：量化（第 11 篇）后要评估精度损失，工业界最常用的指标就是量化前后 PPL 的变化。
+\end{noteBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[循环] 六、Softmax 与交叉熵的梯度：本系列最重要的一组推导}
+
+\subsection{Softmax 的雅可比矩阵}
+
+$p_i = \frac{e^{z_i}}{S}$，其中 $S = \sum_k e^{z_k}$。注意 $\frac{\partial S}{\partial z_j} = e^{z_j}$。用商的求导法则 $\left(\frac{u}{v}\right)' = \frac{u'v - uv'}{v^2}$：
+
+\textbf{情况 $i = j$}：
+
+\[
+\frac{\partial p_i}{\partial z_i} = \frac{e^{z_i} S - e^{z_i} e^{z_i}}{S^2} = \frac{e^{z_i}}{S} - \left(\frac{e^{z_i}}{S}\right)^2 = p_i - p_i^2 = p_i(1 - p_i)
+\]
+
+\textbf{情况 $i \neq j$}（分子 $e^{z_i}$ 不含 $z_j$，导数为 0）：
+
+\[
+\frac{\partial p_i}{\partial z_j} = \frac{0 \cdot S - e^{z_i} e^{z_j}}{S^2} = -p_i p_j
+\]
+
+合并成一个式子（$\delta_{ij}$ 在 $i=j$ 时为 1，否则为 0）：
+
+\[
+\boxed{\ \frac{\partial p_i}{\partial z_j} = p_i(\delta_{ij} - p_j)\ }
+\]
+
+第 4 篇解释"为什么必须除以 $\sqrt{d_k}$"时，用的就是这个公式。\textbf{当某个 $p_i \to 1$、其余 $p_j \to 0$ 时，每一项 $p_i(\delta_{ij} - p_j)$ 都 $\to 0$}：$i=j$ 时是 $1 \times (1-1)$，$i \neq j$ 时含因子 $p_j \to 0$ 或 $p_i \to 0$。这就严格说明了"Softmax 饱和 $\rightarrow$ 梯度消失"，第 4 篇会据此推出"必须除以 $\sqrt{d_k}$"。
+
+\subsection{Softmax + 交叉熵：一个美得不可思议的结果}
+
+设正确类别为 $y$，$\mathcal{L} = -\log p_y$。对 logit $z_j$ 求导（链式法则，经过所有 $p_i$ 的路径相加——但 $\mathcal{L}$ 只依赖 $p_y$，所以只有一条路径）：
+
+\[
+\frac{\partial \mathcal{L}}{\partial z_j} = -\frac{1}{p_y} \cdot \frac{\partial p_y}{\partial z_j} = -\frac{1}{p_y} \cdot p_y(\delta_{yj} - p_j) = p_j - \delta_{yj}
+\]
+
+\[
+\boxed{\ \nabla_z \mathcal{L} = \vec{p} - \vec{y}_{\text{one-hot}}\ }
+\]
+
+\textbf{梯度就是"模型预测的分布减去真实分布"。} 预测对了多少，梯度就小多少；而且它永远不会因为 Softmax 饱和而消失——只要预测错了（$p_y$ 小），梯度就大。这正是分类与语言模型都用"Softmax + 交叉熵"组合的深层原因。
+
+\subsection{工程细节：永远不要先算 Softmax 再取 log}
+
+$\log(\text{softmax}(z))_y = z_y - \log \sum_k e^{z_k}$。后一项叫 \textbf{LogSumExp}，用第 2 篇的平移技巧稳定计算：
+
+\[
+\text{LSE}(z) = m + \log \sum_k e^{z_k - m}, \quad m = \max_k z_k
+\]
+
+先算 softmax 再取 log，当某个 $p$ 下溢成 0 时会得到 $\log 0 = -\infty$。PyTorch 的 \texttt{F.cross\_entropy} 直接吃 logits、内部用 LSE，就是这个原因。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[下降] 七、梯度消失与爆炸：从 Sigmoid、RNN 到残差与 LSTM 的一条暗线}
+
+\subsection{激活函数的导数决定了梯度能走多远}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{2.5cm} p{3.5cm} X X}
+\toprule
+\textbf{激活函数} & \textbf{公式} & \textbf{导数} & \textbf{导数上界} \\
+\midrule
+Sigmoid & $\sigma(x) = \frac{1}{1 + e^{-x}}$ & $\sigma(x)(1 - \sigma(x))$ & $\mathbf{1/4}$（在 $x=0$） \\
+Tanh & $\tanh(x)$ & $1 - \tanh^2(x)$ & $1$ \\
+ReLU & $\max(0, x)$ & $0$ 或 $1$ & $1$ \\
+SiLU / Swish & $x \sigma(x)$ & $\sigma(x)(1 + x(1 - \sigma(x)))$ & 约 $1.1$ \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+用 Sigmoid 堆 10 层，即使权重完美，梯度也至少被乘上 $(1/4)^{10} \approx 10^{-6}$。\textbf{这就是 2012 年以前深层网络训练不动、AlexNet 改用 ReLU 后一举成功的重要原因之一。} 现代大模型的 SwiGLU 里用的是 SiLU（第 5 篇讲它的来历）。
+
+\subsection{RNN 为什么会忘记（第 1 篇"传话游戏"的数学版）}
+
+$h_t = \tanh(W_h h_{t-1} + W_x x_t)$，对前一步求导：
+
+\[
+\frac{\partial h_t}{\partial h_{t-1}} = \text{diag}(\tanh'(\cdot)) \, W_h
+\]
+
+从第 $T$ 步传回第 1 步要连乘 $T-1$ 个这样的矩阵：
+
+\[
+\frac{\partial h_T}{\partial h_1} = \prod_{t=2}^{T} \text{diag}(\tanh'_t) \, W_h
+\]
+
+粗略地说，若 $W_h$ 的最大奇异值 $< 1$，连乘指数级趋于 0（\textbf{梯度消失}，远处的词学不到）；若 $> 1$ 则可能指数级爆炸（Pascanu et al., 2013）。
+
+\subsection{LSTM 与残差连接：同一个思想——"加法通路"}
+
+\begin{itemize}
+  \item \textbf{LSTM（1997）}：细胞状态更新为 $c_t = f_t \odot c_{t-1} + i_t \odot g_t$，于是 $\frac{\partial c_t}{\partial c_{t-1}} = \text{diag}(f_t)$。遗忘门 $f_t$ 可以学到接近 1，梯度就能几乎无衰减地沿 $c$ 流过很多步。
+  \item \textbf{ResNet / Transformer 残差（2015/2017）}：$x_l = x_{l-1} + F(x_{l-1})$，$\frac{\partial x_l}{\partial x_{l-1}} = I + \frac{\partial F}{\partial x_{l-1}}$（第 4 篇 §5 会在 Transformer 里再推导一次）。
+\end{itemize}
+
+\textbf{两者都是把"乘法连乘的通路"换成"加法直通的通路"。} 理解了这一点，你就理解了为什么深度学习史上几次关键突破长得如此相似。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{八、初始化与归一化：与 $\sqrt{d_k}$ 同一个方差推导}
+
+\textbf{独立随机变量之和的方差等于各自方差之和}，所以 $d$ 个独立的单位方差项相加，方差变为 $d$（第 4 篇推导"除以 $\sqrt{d_k}$"时用的也是这一条）。把它用在一层线性变换 $y_j = \sum_{i=1}^{n} w_{ij} x_i$ 上（$w, x$ 独立、零均值）：
+
+\[
+\text{Var}(y_j) = n \cdot \text{Var}(w) \cdot \text{Var}(x)
+\]
+
+想让信号逐层既不放大也不衰减，就需要 $\text{Var}(w) = 1/n$。这就是 \textbf{Xavier 初始化（2010）} 的核心；配合 ReLU（砍掉一半信号）时要 $\text{Var}(w) = 2/n$，即 \textbf{He 初始化（2015）}。
+即使初始化得当，训练过程中分布也会漂移，于是有了 \textbf{BatchNorm（2015）$\rightarrow$ LayerNorm（2016）$\rightarrow$ RMSNorm（2019）}，把每层输入的尺度重新"拉回来"（演进原因见第 5 篇）。
+
+\begin{mathBox}[核心数学定理推导]
+{}[反向] \textbf{同一个推导出现了三次}：$\sqrt{d_k}$ 缩放、Xavier/He 初始化、归一化层，本质都是"\textbf{控制方差，让数值待在激活函数和 Softmax 的敏感区间里}"。
+\end{mathBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[演练] 九、优化器与"为什么训练比推理贵这么多显存"}
+
+\begin{itemize}
+  \item \textbf{SGD}：$\theta \leftarrow \theta - \eta g$。
+  \item \textbf{Momentum}：$m \leftarrow \beta m + g$，$\theta \leftarrow \theta - \eta m$（在峡谷形的损失面上抑制来回震荡）。
+  \item \textbf{Adam（2014）}：同时维护一阶矩 $m$ 和二阶矩 $v$：
+\end{itemize}
+
+\[
+m \leftarrow \beta_1 m + (1-\beta_1) g, \quad v \leftarrow \beta_2 v + (1-\beta_2) g^2, \quad \theta \leftarrow \theta - \eta \frac{\hat{m}}{\sqrt{\hat{v}} + \epsilon}
+\]
+
+（$\hat{m}, \hat{v}$ 是偏差修正后的值。）相当于给每个参数一个自适应的学习率。
+
+\textbf{显存账本（混合精度 + Adam，每个参数）}：
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3cm} p{4.5cm} X}
+\toprule
+\textbf{项目} & \textbf{训练} & \textbf{推理} \\
+\midrule
+BF16 权重 & 2 B & 2 B \\
+BF16 梯度 & 2 B & — \\
+FP32 主权重副本 & 4 B & — \\
+Adam $m$（FP32） & 4 B & — \\
+Adam $v$（FP32） & 4 B & — \\
+\textbf{合计} & \textbf{16 B / 参数}（还没算激活） & \textbf{2 B / 参数}（+ KV Cache） \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+所以 7B 模型训练至少 112 GB，推理只要 14 GB。这就是为什么你在一张 16GB 的 5060 Ti 上\textbf{能}做推理研究、\textbf{不能}从头训练 7B——也是本仓库路线把重心放在推理上的原因。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[OK] 本篇自测（答不出来就回去重读对应小节）}
+
+\begin{enumerate}
+  \item 为什么学习率过大时损失会上升？（提示：一阶近似）
+  \item 一个 $[B, K] \times [K, N]$ 的矩阵乘，反向传播需要做哪两个矩阵乘？各自的形状是什么？总 FLOPs 是前向的几倍？
+  \item 用 $p_i(\delta_{ij} - p_j)$ 解释：为什么 Softmax 各输入之间的\textbf{差距}越大，梯度越小？（为什么不能说"输入数值越大"？提示：给所有输入同时加 100，雅可比变不变？）
+  \item 字符级模型词表 $V = 65$，随机初始化时损失大约应是多少？PPL 呢？
+  \item LSTM 的细胞状态和 Transformer 的残差连接，在"梯度流"意义上共享了哪个设计？
+  \item 为什么 7B 模型推理只要约 14GB，训练却要 100GB 以上？
+\end{enumerate}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[资料] 外部资源（按推荐顺序）}
+
+\begin{enumerate}
+  \item {}\href{https://www.3blue1brown.com/topics/neural-networks}{3Blue1Brown $\cdot$ 神经网络系列} 第 2\textasciitilde{}4 集（梯度下降、反向传播直觉、反向传播微积分）——先建立图像。
+  \item {}\href{https://karpathy.ai/zero-to-hero.html}{Andrej Karpathy $\cdot$ The spelled-out intro to neural networks and backpropagation: building micrograd}（Zero to Hero 第 1 集，约 2.5 小时）——\textbf{强烈建议跟着敲}，配套实验就是它的中文注释精简版。
+  \item {}\href{https://cs231n.github.io/optimization-2/}{CS231n 反向传播讲义} ——计算图与"门"的局部梯度视角，含矩阵求导的形状技巧。
+  \item {}\href{https://explained.ai/matrix-calculus/}{The Matrix Calculus You Need For Deep Learning} ——想把矩阵求导彻底弄懂时看。
+  \item {}\href{https://zh.d2l.ai/chapter\_multilayer-perceptrons/backprop.html}{《动手学深度学习》4.7 前向传播、反向传播和计算图}、\href{https://zh.d2l.ai/chapter\_multilayer-perceptrons/numerical-stability-and-init.html}{4.8 数值稳定性和模型初始化}。
+  \item 论文（选读）：Rumelhart et al. 1986 \textit{Learning representations by back-propagating errors}；Pascanu et al. 2013 \href{https://arxiv.org/abs/1211.5063}{On the difficulty of training RNNs}；Kingma \& Ba 2014 \href{https://arxiv.org/abs/1412.6980}{Adam}。
+\end{enumerate}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\textbf{上一篇}：\textbf{第 2 篇：零基础必备数学直觉：向量、空间变换、点积与 Softmax 深度推导} ｜ \textbf{下一篇}：\textbf{第 4 篇：Transformer 核心公式彻底推导：每一个符号从何而来} ｜ \textbf{总路线}：\textbf{LEARNING\_PATH.md}

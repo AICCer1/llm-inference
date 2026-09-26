@@ -1,0 +1,265 @@
+\chapter*{前言：大模型推理的底层物理规律}
+\addcontentsline{toc}{chapter}{前言：大模型推理的底层物理规律}
+\section{[起步] 大模型推理（LLM Inference）系统学习指南}
+
+欢迎开启大模型推理学习之旅！
+
+在现代 AI 系统中，\textbf{模型训练是「一次性成本」，而模型推理是「长期且持续膨胀的在线成本」}。大模型推理的瓶颈通常不是算力（Compute Bound），而是\textbf{显存容量与内存带宽（Memory Bandwidth Bound）}。理解并掌握大模型推理的核心机制，是从事 AI Infra、算法部署和高性能计算（HPC）的关键技能。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[指南] 从这里开始}
+
+\textbf{--> 先读 \textbf{LEARNING\_PATH.md：完整学习路径}。} 它规定了先学什么、后学什么、每个阶段需要先补哪些外部资源（具体到哪一集、哪一章），以及每个阶段的"出关检验"和"卡住了回去补哪里"。
+下面的列表只是索引。
+
+\textbf{环境准备}（RTX 50 系显卡必须使用 CUDA 12.8 版本的 PyTorch）：
+
+\begin{lstlisting}[language=bash]
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+\end{lstlisting}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[重点] 【零基础首选】小白到精通·原理与数学公式完整推导教程}
+
+\begin{mathBox}[核心数学定理推导]
+适合人群：\textbf{没有任何深度学习基础、对公式推导和历史背景充满好奇的零基础学习者}。包含从 1950 年代规则系统到 Transformer 的完整演进史，以及所有核心公式的逐行代数证明：
+\end{mathBox}
+
+\begin{enumerate}
+  \item {}[概览] \textbf{\textbf{第 0 篇（导读）：AI 深度学习全景族谱与零基础入门指南}}
+\end{enumerate}
+
+\begin{itemize}
+  \item 从感知机到 CNN、ResNet、RNN、Transformer 的科技树全景族谱，各种“Net”到底都是干什么的，不踩坑入门资源与学习路线。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[阅读] \textbf{\textbf{第 1 篇：计算机如何读懂语言？从人工规则到大模型演进史}}
+\end{enumerate}
+
+\begin{itemize}
+  \item 计算机的本质、人工规则为何崩溃、N-gram 语言模型、神经网络与反向传播底座、RNN/LSTM 的长程遗忘与并行死穴、Transformer 的颠覆。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[几何] \textbf{\textbf{第 2 篇：零基础必备数学直觉：向量、空间变换、点积与 Softmax 深度推导}}
+\end{enumerate}
+
+\begin{itemize}
+  \item 标量/向量/张量物理本质、点积与余弦夹角几何意义（为什么代表相似度）、矩阵乘法的空间投影本质、Softmax 的指数来源与防溢出平移不变性证明。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[反向] \textbf{\textbf{第 3 篇：神经网络如何学习：导数、链式法则、反向传播与交叉熵}}
+\end{enumerate}
+
+\begin{itemize}
+  \item 梯度为什么指向下山方向（证明）、反向传播为什么比其它求导方法快、矩阵乘反向公式 $X^TG$ / $GW^T$、交叉熵 = 最大似然、困惑度、\textbf{Softmax 雅可比与 $p - y$ 梯度的完整推导}、梯度消失与"加法通路"、训练 6N vs 推理 2N、训练与推理的显存账本。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[推导] \textbf{\textbf{第 4 篇：Transformer 核心公式彻底推导：每一个符号从何而来}}
+\end{enumerate}
+
+\begin{itemize}
+  \item Q/K/V 检索设计、\textbf{【重点推导】为什么必须除以 $\sqrt{d_k}$（独立变量方差爆炸与 Softmax 梯度消失严格证明）}、因果掩码 $-\infty$、残差连接常数导数高速公路、RoPE 相对位置内积恒等性证明。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[架构] \textbf{\textbf{第 5 篇：从原版 Transformer 到 Llama / DeepSeek：每一处改动的历史动机}}
+\end{enumerate}
+
+\begin{itemize}
+  \item 注意力的真正起源（Bengio 2003 $\rightarrow$ Seq2Seq 瓶颈 $\rightarrow$ Bahdanau）、BPE 分词与词表大小的推理代价、为什么仅解码器胜出、规模定律与"推理成本成为主问题"、Pre-LN / RMSNorm / SwiGLU / RoPE / MQA$\rightarrow$GQA$\rightarrow$MLA / MoE 每一处改动的动机。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[加速] \textbf{\textbf{第 6 篇：什么是推理？自回归生成全生命周期与 KV Cache 代数证明}}
+\end{enumerate}
+
+\begin{itemize}
+  \item 训练与推理的本质鸿沟、Prefill（算力受限）vs Decode（访存受限）、KV Cache 代数展开冗余消除证明、显存爆炸计算公式与 PagedAttention 诞生背景。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[决策] \textbf{\textbf{第 7 篇：大模型的决策大脑：Logits、温度系数极限证明与采样算法}}
+\end{enumerate}
+
+\begin{itemize}
+  \item LM Head 词表投影、\textbf{【定理推导】温度参数 $T \to 0$（唯一最大值时收敛到贪婪）与 $T \to \infty$（均匀分布）严格数学极限证明}、Top-K 截断、Top-P 动态核采样与重复惩罚。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[硬件] \textbf{\textbf{第 8 篇：硬件视角：GPU 存储层级、FLOPs、算术强度与浮点格式}}
+\end{enumerate}
+
+\begin{itemize}
+  \item Roofline 模型、\textbf{推导"Decode 线性层算术强度 $\approx$ batch size"与"Decode 注意力算术强度 $\approx$ GQA 分组大小"}、Decode 耗时模型、算子融合、FP32 / BF16 / FP16 / FP8 / FP4 的位布局与精度陷阱。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[加速] \textbf{\textbf{第 9 篇：FlashAttention：Online Softmax 的严格推导与 IO 复杂度}}
+\end{enumerate}
+
+\begin{itemize}
+  \item Online Softmax 的归纳法证明、分块注意力、IO 复杂度、FlashDecoding 的 split-K 合并公式及其结合律。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[采样] \textbf{\textbf{第 10 篇：投机解码：无偏性证明与期望加速比}}
+\end{enumerate}
+
+\begin{itemize}
+  \item \textbf{投机采样无偏性定理的完整证明}、接受率与总变差距离、期望加速比公式与最优 K、为什么大 batch 时收益消失。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[量化] \textbf{\textbf{第 11 篇：量化：从每位 6 dB 到 SmoothQuant、AWQ 与 GPTQ}}
+\end{enumerate}
+
+\begin{itemize}
+  \item 每位 6 dB 规律、激活离群值、量化权重还是激活（由 Roofline 决定）、SmoothQuant / AWQ / GPTQ 的数学原理（含两变量的 GPTQ 直观例子）。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[系统] \textbf{\textbf{第 12 篇：推理服务系统：PagedAttention、前缀缓存与调度}}
+\end{enumerate}
+
+\begin{itemize}
+  \item TTFT / TPOT / Goodput 指标、Little 定律、显存碎片与分页、写时复制、前缀缓存、Chunked Prefill 与 P/D 分离。
+\end{itemize}
+
+\begin{enumerate}
+  \item {}[并行] \textbf{\textbf{第 13 篇：多卡并行推理：张量并行、流水线并行与专家并行}}
+\end{enumerate}
+
+\begin{itemize}
+  \item 通信原语与 Ring All-Reduce、Megatron "先列后行"切法的推导、PP 为什么不降延迟、MoE 的专家并行。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{学习路线图 (Learning Roadmap)}
+
+完整的阶段划分、前置条件与外部资源见 \textbf{\textbf{LEARNING\_PATH.md}}。简版：
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[目录] 本学习仓库目录结构}
+
+实验目录 \texttt{labNN\_*} 的 \textbf{NN 就是它配套的那一篇}（一篇配多个实验时用 a/b 区分）。每个目录都有说明文档和可直接运行的代码：
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{2.5cm} p{3.5cm} X X}
+\toprule
+\textbf{对应篇} & \textbf{目录} & \textbf{核心内容} & \textbf{重点代码} \\
+\midrule
+\textbf{第 3 篇} & {}\textbf{\texttt{lab03\_autograd\_from\_scratch/}} & 约 350 行纯 Python 自动求导，数值验证 Softmax 雅可比、交叉熵梯度、矩阵乘反向公式、梯度消失、XOR & \texttt{micrograd\_from\_scratch.py} \\
+\textbf{第 4 篇} & {}\textbf{\texttt{lab04\_transformer\_microscope/}} & \textbf{【极细基础】}从分词到下一个字的微观全貌、张量维度流动、RoPE 旋转、置换等变性与长程衰减的正确表述 & \texttt{01\_tensor\_trace\_step\_by\_step.py}\newline \texttt{02\_rope\_and\_attention\_microscope.py} \\
+\textbf{第 5 篇} & {}\textbf{\texttt{lab05\_train\_tiny\_llama/}} & 用本仓库教程做语料训练一个迷你 Llama（RMSNorm / RoPE / GQA / SwiGLU），再做 KV Cache 对拍与采样 & \texttt{model.py}\newline \texttt{train.py}\newline \texttt{generate.py} \\
+\textbf{第 6 篇} & {}\textbf{\texttt{lab06\_kv\_cache/}} & Prefill 与 Decode 阶段区别、自回归生成的重复计算痛点、KV Cache 机制与代码对比 & \texttt{kv\_cache\_benchmark.py} \\
+\textbf{第 7 篇} & {}\textbf{\texttt{lab07a\_sampling/}} & Greedy、温度、Top-K、Top-P、重复惩罚的概率分布前后对比 & \texttt{sampling\_strategies.py} \\
+\textbf{第 7 篇} & {}\textbf{\texttt{lab07b\_qwen\_from\_scratch/}} & \textbf{【关键】}只读原始权重、手写 Qwen2.5 推理，与 HF 官方逐位对拍 logits 与生成结果 & \texttt{qwen\_from\_scratch.py} \\
+\textbf{第 8 篇} & {}\textbf{\texttt{lab08\_memory\_and\_roofline/}} & 模型权重、KV Cache、激活值显存计算，计算密度（Arithmetic Intensity）与 Roofline 模型分析 & \texttt{memory\_calculator.py} \\
+\textbf{第 9 篇} & {}\textbf{\texttt{lab09\_flash\_attention/}} & Online Softmax、分块 FlashAttention、FlashDecoding 合并，GPU 上朴素 vs SDPA；\textbf{\textbf{真机 CUDA 附录}}：同一套 online softmax 写成 CUDA C++ kernel，实测 DRAM 带宽与占用率 & \texttt{flash\_attention\_numpy.py}\newline \texttt{cuda\_softmax/softmax\_kernels.cu} \\
+\textbf{第 10 篇} & {}\textbf{\texttt{lab10\_speculative\_decoding/}} & 投机采样（Speculative Decoding）核心思想、草稿模型生成与主模型并行验证算法 & \texttt{toy\_speculative\_decoding.py} \\
+\textbf{第 11 篇} & {}\textbf{\texttt{lab11\_quantization/}} & 对称与非对称量化、Per-Tensor / Per-Channel / Per-Group 量化、AWQ / GPTQ 原理 & \texttt{quant\_basics.py} \\
+\textbf{第 12 篇} & {}\textbf{\texttt{lab12a\_continuous\_batching/}} & 静态 Batching 的「气泡（Padding/Bubble）」问题、迭代级调度（Continuous Batching）仿真 & \texttt{continuous\_batching\_sim.py} \\
+\textbf{第 12 篇} & {}\textbf{\texttt{lab12b\_paged\_attention/}} & 块分配器、块表、分页注意力、写时复制、前缀缓存、Chunked Prefill & \texttt{paged\_kv\_cache\_sim.py} \\
+\textbf{第 13 篇} & {}\textbf{\texttt{lab13\_parallelism/}} & 张量并行 MLP / 注意力、错误切法反例、Ring All-Reduce、多卡 Decode 延迟模型 & \texttt{tensor\_parallel\_sim.py} \\
+\textbf{毕业设计} & {}\textbf{\texttt{capstone\_engines\_practice/}} & vLLM / llama.cpp 部署与压测任务、源码阅读路线（毕业设计） & \texttt{bench\_openai\_server.py} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Lab 08、10、11 还各新增了进阶脚本：\texttt{measure\_gpu\_roofline.py}（在你的显卡上实测 Roofline）、\texttt{verify\_unbiasedness.py}（蒙特卡洛验证投机采样定理）、\texttt{advanced\_quant\_numpy.py}（从零实现 SmoothQuant / AWQ / GPTQ）。
+
+\textbf{全仓库唯一一份真 CUDA C++} 在 \textbf{\texttt{lab09\_flash\_attention/cuda\_softmax/}}：把第 9 篇的 Online Softmax 写成 kernel（\texttt{\_\_global\_\_} / \texttt{\_\_shared\_\_} / \texttt{\_\_syncthreads()}），量出 DRAM 带宽、L2 命中与占用率。用 PyTorch 自带的 NVRTC 编译，\textbf{不需要装 CUDA toolkit}。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[决策] 核心概念速查手册}
+
+\subsection{Prefill（首字）vs Decode（增量生成）阶段}
+
+\begin{itemize}
+  \item \textbf{Prefill 阶段（首字延迟 TTFT: Time to First Token）}：
+  \item 输入所有 prompt tokens，能够并行计算。
+  \item 特征：\textbf{Compute-bound（算力受限）}，GPU 利用率高，矩阵乘法规模大 ($M \times K \times N$, $M > 1$)。
+  \item \textbf{Decode 阶段（每个后续 token 的延迟 TPOT: Time Per Output Token）}：
+  \item 串行逐字生成，每次输入仅 1 个 token。
+  \item 特征：\textbf{Memory-bound（访存带宽受限）}。每次生成 1 个 token 都需要把数十亿参数和全部历史 KV Cache 从显存搬运进 GPU 计算核心。
+\end{itemize}
+
+\subsection{KV Cache 显存占用计算公式}
+
+对于标准 Transformer 结构模型：
+\begin{itemize}
+  \item 参数量：$P$
+  \item 层数：$L$
+  \item 隐藏层大小：$H$ 或注意力头数 $n_{\text{heads}} \times d_{\text{head}}$
+  \item 上下文总长度（Prompt + Generated）：$S$
+  \item 批大小：$B$
+  \item 精度字节数：$b$（FP16/BF16 为 2 字节，FP8/INT8 为 1 字节，INT4 为 0.5 字节）
+\end{itemize}
+
+每个 Token 产生的 Key 和 Value 向量显存（bytes）：
+
+\[
+\text{KV per token} = 2 \times L \times H \times b
+\]
+
+\textit{(注：如果采用 MQA/GQA，隐藏层维度 $H$ 需按 KV 组数比例缩减，例如 GQA-8 缩减为原来的 $1/8$)}
+
+批次总 KV Cache 显存（bytes）：
+
+\[
+\text{Total KV Cache} = B \times S \times 2 \times L \times H \times b
+\]
+
+\begin{noteBox}[核心导读与背景]
+\textbf{示例（Llama-3-8B, 32 层, 隐藏层 4096, GQA 8 个 KV 头 vs 32 个 Q 头, FP16）：}
+每个 token 仅需要 $2 \times 32 \times (4096/4) \times 2 = 131,072 \text{ bytes} \approx 128 \text{ KB}$。
+长度 8192 时，单并发约 1 GB，若并发达 32，则需 32 GB 显存（远超模型权重自身的 16 GB）！
+\end{noteBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[工具] 主流推理引擎横向对比}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{2.5cm} p{3.5cm} X X}
+\toprule
+\textbf{框架} & \textbf{适用场景} & \textbf{核心亮点} & \textbf{推荐初学者体验} \\
+\midrule
+\textbf{\href{https://github.com/vllm-project/vllm}{vLLM}} & 工业界高吞吐部署标准 & PagedAttention 显存零浪费、Continuous Batching、广泛支持各类模型 & $\star$$\star$$\star$$\star$$\star$ \\
+\textbf{\href{https://github.com/sgl-project/sglang}{SGLang}} & 复杂 Prompt、Agent/结构化生成、超高吞吐 & RadixAttention（自动 KV 复用）、高性能 Runtime & $\star$$\star$$\star$$\star$$\star$ \\
+\textbf{\href{https://github.com/NVIDIA/TensorRT-LLM}{TensorRT-LLM}} & NVIDIA 极致性能压榨 & 深度融合 Kernel、In-flight Batching、FP8/FP4 极致调优 & $\star$$\star$$\star$$\star$ \\
+\textbf{\href{https://github.com/ggml-org/llama.cpp}{llama.cpp}} & 边缘设备、CPU、Mac、本地轻量推理 & 零依赖纯 C++、极致 GGUF 量化支持 & $\star$$\star$$\star$$\star$$\star$ \\
+\textbf{\href{https://github.com/huggingface/text-generation-inference}{TGI (Text Generation Inference)}} & Hugging Face 生态生产部署 & 简单可靠、支持 FlashAttention、生产级运维特性 & $\star$$\star$$\star$$\star$ \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[目标] 推荐第一步}
+
+\begin{enumerate}
+  \item 读 \textbf{LEARNING\_PATH.md}，对照"阶段 0"的表格检查自己缺哪块数学基础。
+  \item 读第 0、1 篇建立全局地图，然后按路径进入阶段 2（第 2 篇 $\rightarrow$ 第 3 篇 $\rightarrow$ Lab 03）。
+  \item 想先看到"真东西"提提兴趣的话，可以先跑一下：
+\end{enumerate}
+
+\begin{lstlisting}[language=bash]
+   .venv/bin/python lab05_train_tiny_llama/train.py && .venv/bin/python lab05_train_tiny_llama/generate.py
+   
+\end{lstlisting}
+
+   花一分钟训练出一个会"背诵本教程"的迷你 Llama——然后再回到路径上，把它的每一行都弄懂。

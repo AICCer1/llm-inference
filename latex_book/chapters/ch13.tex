@@ -1,0 +1,194 @@
+\chapter{多卡并行推理：张量并行、流水线并行与专家并行}
+
+\begin{noteBox}[核心导读与背景]
+\textbf{阅读前须知}：一张 16GB 的卡能跑 7B（量化后），但 70B 的 BF16 权重就要 140GB，DeepSeek-V3 更是 671B。模型放不下一张卡时，必须把它\textbf{切开}放到多张卡上。怎么切、切完之后卡与卡之间要传什么、传多少——这些决定了多卡推理的速度。
+
+\textbf{前置}：第 3 篇（矩阵乘的形状）、第 5 篇（MoE）、第 8 篇（带宽与耗时模型）、第 9 篇（Online Softmax 合并）。
+
+\textbf{配套实验}：\textbf{\texttt{lab13\_parallelism/tensor\_parallel\_sim.py}}——用 NumPy 模拟多卡：张量并行的 MLP 与注意力、错误切法的反例、Ring All-Reduce、多卡 Decode 延迟模型。
+\end{noteBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{一、先认识"通信原语"和它们的代价}
+
+多卡之间交换数据的几种标准操作（NCCL 库实现）：
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3cm} p{4.5cm} X}
+\toprule
+\textbf{原语} & \textbf{做什么} & \textbf{典型用途} \\
+\midrule
+\textbf{All-Reduce} & 每张卡有一个同形状张量，结果是\textbf{所有卡的和}，每张卡都拿到 & 张量并行合并部分和 \\
+All-Gather & 每张卡有一块，结果是\textbf{拼接}后的完整张量 & 拼回被切开的激活 \\
+Reduce-Scatter & 先求和，再把结果切块，每张卡拿一块 & All-Reduce 的前半段 \\
+\textbf{All-to-All} & 每张卡把自己的数据切成 $n$ 份分别发给每张卡 & MoE 把 token 发给对应专家 \\
+Send / Recv & 点对点 & 流水线并行传激活 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Ring All-Reduce 的代价}：$n$ 张卡连成环，先做 Reduce-Scatter 再做 All-Gather，每张卡发送的数据量为
+
+\[
+2 \cdot \frac{n-1}{n} \cdot \text{数据大小}
+\]
+
+几乎与卡数无关——这是它被广泛采用的原因。但每一次通信还有一个\textbf{固定延迟}（几微秒到几十微秒），数据很小时，延迟占主导。
+
+\textbf{互联带宽差距巨大}：
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3.5cm} X}
+\toprule
+\textbf{互联} & \textbf{单向带宽量级} \\
+\midrule
+NVLink（H100，同机 8 卡） & 约 450 GB/s \\
+PCIe 4.0 x16 / 5.0 x16 & 约 25 / 50 GB/s \\
+InfiniBand 400 Gb/s（跨机） & 约 50 GB/s \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+所以"切法"必须和"连接方式"匹配：通信频繁的切法只能用在 NVLink 连接的同一台机器内。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{二、张量并行（Tensor Parallelism, TP）：把每一层的矩阵切开}
+
+Megatron-LM（2019）给出了 Transformer 最经典的切法。以 FFN 为例：$Y = f(X A) B$，$f$ 是逐元素的非线性（GeLU / SiLU）。
+
+\subsection{第一个矩阵按列切}
+
+把 $A$ 按列切成 $[A_1, A_2]$，卡 $i$ 持有 $A_i$：
+
+\[
+X A = [X A_1, \ X A_2] \quad \Rightarrow \quad f(XA) = [f(X A_1), \ f(X A_2)]
+\]
+
+\textbf{因为 $f$ 是逐元素的}，每张卡可以独立地对自己那半算非线性，\textbf{不需要任何通信}。
+
+\subsection{第二个矩阵按行切}
+
+把 $B$ 按行切成 $\begin{bmatrix} B_1 \\ B_2 \end{bmatrix}$，卡 $i$ 持有 $B_i$：
+
+\[
+Y = [f(XA_1), \ f(XA_2)] \begin{bmatrix} B_1 \\ B_2 \end{bmatrix} = f(XA_1) B_1 + f(XA_2) B_2
+\]
+
+每张卡算出一个\textbf{部分和}，最后做\textbf{一次 All-Reduce} 求和。
+
+\subsection{为什么不能反过来？}
+
+如果 $A$ 按\textbf{行}切（即切分输入维度），每张卡得到的是 $X_i A_i$ 这样的\textbf{部分和}，而
+
+\[
+f(X_1 A_1 + X_2 A_2) \neq f(X_1 A_1) + f(X_2 A_2)
+\]
+
+非线性函数对加法不分配，必须先 All-Reduce 求和才能做 $f$——多了一次通信。\textbf{"先列后行"让两次矩阵乘之间的非线性完全在本地完成，每个子层只通信一次。}
+
+SwiGLU 同理：$W_{\text{gate}}$、$W_{\text{up}}$ 按列切，$W_{\text{down}}$ 按行切（$\text{SiLU}(\cdot) \odot (\cdot)$ 是逐元素的）。
+
+\subsection{注意力：按"头"切}
+
+多个注意力头本来就互相独立，这恰好就是"按列切"：$W_q, W_k, W_v$ 按头分给不同的卡（列切），每张卡独立算自己那几个头的注意力，$W_o$ 按行切，最后一次 All-Reduce。
+\textbf{附带好处}：每张卡只存自己那些头的 KV Cache，KV 显存也被均分。（GQA 的 KV 头数少于 TP 卡数时，KV 头需要复制到多张卡上。）
+
+\subsection{代价与收益}
+
+\begin{itemize}
+  \item \textbf{每层 2 次 All-Reduce}（注意力后一次、FFN 后一次），数据量是 $[\text{token 数}, d_{\text{model}}]$。
+  \item \textbf{Decode 收益}：每张卡只读 $1/n$ 的权重，第 8 篇的访存时间直接除以 $n$——\textbf{TP 能降低单请求延迟}，这是它在推理中最重要的价值。
+  \item \textbf{Decode 代价}：每步 $2L$ 次 All-Reduce，每次数据量很小（batch $\times$ 8192 $\times$ 2 字节），\textbf{延迟主导}。在 PCIe 上，通信时间可能超过省下的计算时间，TP 加卡反而变慢（配套实验会算给你看）。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[硬件] 三、流水线并行（Pipeline Parallelism, PP）：按层切}
+
+把 80 层分成 4 段，每张卡放 20 层，激活依次在卡之间传递。
+\begin{itemize}
+  \item \textbf{通信少}：每段边界只传一次激活（点对点），适合跨机器；
+  \item \textbf{不降低单请求延迟}：一个 token 仍要依次穿过所有层，第 1 张卡算完第 2 张卡才能开始；
+  \item \textbf{气泡}：如果只有一个请求，任一时刻只有一张卡在工作。推理服务里有大量请求时，可以把不同请求（micro-batch）错开塞进流水线，让每张卡都忙起来——\textbf{PP 提升吞吐，不提升延迟}。
+\end{itemize}
+
+llama.cpp 在多张消费级显卡之间"按层分配"，本质上就是流水线式切分。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[人员][实验] 四、专家并行（Expert Parallelism, EP）：MoE 的切法}
+
+MoE 层有几十上百个专家（第 5 篇），把不同的专家放在不同的卡上：
+\begin{enumerate}
+  \item 路由器算出每个 token 要去哪 $k$ 个专家；
+  \item \textbf{All-to-All}：把 token 发到对应专家所在的卡；
+  \item 各卡计算自己的专家；
+  \item 再一次 \textbf{All-to-All} 把结果发回原卡，按路由权重加权求和。
+\end{enumerate}
+
+难点：
+\begin{itemize}
+  \item \textbf{负载均衡}：热门专家所在的卡会成为瓶颈，训练时要加负载均衡损失或偏置调整（DeepSeek-V3 使用无辅助损失的偏置调整）；
+  \item \textbf{All-to-All 通信量大}，需要高带宽网络；DeepSeek 为此专门开发了通信库 DeepEP。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[并行] 五、其它并行方式}
+
+\begin{itemize}
+  \item \textbf{数据并行（DP）}：每张卡放一份完整模型，各自服务不同请求。最简单，吞吐线性扩展，但每张卡都要放得下整个模型。
+  \item \textbf{序列 / 上下文并行}：超长上下文（百万 token）时，把一个序列的 KV 切到多张卡上。\textbf{Ring Attention} 让 KV 块在卡之间环形传递，每张卡用 \textbf{Online Softmax 的合并公式（第 9 篇 §4）} 累加部分结果——又一次用到了那个满足结合律的合并操作。
+\end{itemize}
+
+\section{[指南] 六、怎么组合？一些经验法则}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3.5cm} X}
+\toprule
+\textbf{场景} & \textbf{常见方案} \\
+\midrule
+单机多卡（NVLink），模型放不下一张卡 & 机内 TP \\
+跨多台机器的超大模型 & 机内 TP + 机间 PP \\
+MoE 大模型（DeepSeek-V3 等） & 专家用 EP，注意力用 DP 或 TP \\
+消费级多卡（PCIe，无 NVLink） & 优先 PP / 按层切分（通信少），或者量化后单卡 \\
+吞吐优先、单卡放得下 & 多副本 DP \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[OK] 本篇自测}
+
+\begin{enumerate}
+  \item Ring All-Reduce 每张卡发送多少数据？为什么说它"几乎与卡数无关"？
+  \item 为什么 FFN 的第一个矩阵按列切、第二个按行切？反过来会怎样？
+  \item 张量并行时每层需要几次 All-Reduce？数据量多大？
+  \item 为什么 TP 能降低 Decode 延迟而 PP 不能？
+  \item 在两张通过 PCIe 连接的 5060 Ti 上跑 TP=2，Decode 一定比单卡快吗？用第 8 篇的耗时模型加上通信项分析。
+  \item Ring Attention 和第 9 篇的哪个公式有关？
+\end{enumerate}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[资料] 外部资源}
+
+\begin{itemize}
+  \item Shoeybi et al. 2019：\href{https://arxiv.org/abs/1909.08053}{Megatron-LM}（张量并行的原始论文，第 3 节图 3 就是本篇第二节）
+  \item Pope et al. 2022：\href{https://arxiv.org/abs/2211.05102}{Efficiently Scaling Transformer Inference}（专门讲\textbf{推理}的多卡切分与延迟/成本权衡，\textbf{强烈推荐}）
+  \item Google DeepMind：\href{https://jax-ml.github.io/scaling-book/}{How to Scale Your Model} 第 3 章（Sharding）与第 7\textasciitilde{}8 章（推理）
+  \item Hugging Face：\href{https://huggingface.co/spaces/nanotron/ultrascale-playbook}{The Ultra-Scale Playbook}（训练视角，但通信原语与并行方式讲得非常直观）
+  \item Huang et al. 2018：\href{https://arxiv.org/abs/1811.06965}{GPipe}（流水线并行）；Liu et al. 2023：\href{https://arxiv.org/abs/2310.01889}{Ring Attention}
+  \item DeepSeek-AI 2024：\href{https://arxiv.org/abs/2412.19437}{DeepSeek-V3 技术报告}（EP、负载均衡、部署方案）
+  \item {}\href{https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html}{NCCL 文档}：各通信原语的定义
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\textbf{上一篇}：\textbf{第 12 篇：推理服务系统：PagedAttention、前缀缓存与调度} ｜ \textbf{总路线}：\textbf{LEARNING\_PATH.md}

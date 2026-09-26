@@ -1,0 +1,426 @@
+\chapter{计算机如何读懂语言？从人工规则到大模型演进史}
+
+\begin{noteBox}[核心导读与背景]
+\textbf{阅读前须知}：本篇不需要任何高等数学或编程背景。我们将从人类对计算机的最初探索讲起，带你一步步理解大模型（LLM）究竟是在什么背景下被发明出来的，以及它究竟解决了前人什么无法逾越的难题。
+\end{noteBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[代码] 一、计算机的天然缺陷：它只懂数字，不懂人类语言}
+
+首先请思考一个最本质的事实：
+\textbf{计算机的硬件核心（CPU 和 GPU），本质上只是无数由晶体管组成的微型电路，它唯一擅长的事情，就是极速计算浮点数的「加法」和「乘法」。}
+
+计算机根本不知道什么是“猫”，什么是“开心”，什么是“我爱你”。
+对于计算机而言，屏幕上的汉字或英文字符，只是一串无意义的二进制编码（比如 UTF-8 编码中，“大”这个字的十六进制代码是 \texttt{0xE5 0xA4 0xA7}）。
+
+人类要想让计算机能对话、能写诗、能编程，就必须完成一个根本性的跨越：
+\textbf{如何把人类丰富、带有歧义、充满上下文语境的自然语言，转化为数字？并让计算机通过纯粹的数学计算，“理解”语言并生成语言？}
+
+为了解决这个问题，人类科学家经历了整整四代探索。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[文献] 二、第一代：基于人工规则与专家系统（1950s - 1980s）}
+
+在计算机科学诞生初期，科学家们认为人类语言是有严格语法规则的。
+
+\subsection{核心做法：}
+
+语言学家人工编写成千上万条逻辑规则：
+\begin{itemize}
+  \item \texttt{句子 = 主语 + 谓语 + 宾语}
+  \item 如果主语是“我”，谓语可以是“吃”，宾语可以是“苹果”。
+  \item 遇到英语单词 \texttt{"bank"}，如果前文有 \texttt{"river"}，就翻译为“河岸”；如果有 \texttt{"money"}，就翻译为“银行”。
+\end{itemize}
+
+\subsection{为什么彻底失败？}
+
+\begin{enumerate}
+  \item \textbf{语言规则无穷无尽}：自然语言充斥着成语、倒装句、隐喻、俚语和错别字，规则写得越多，规则之间就越互相冲突。
+  \item \textbf{缺乏泛化能力}：人类只要说一句规则库里没有的表达（例如：“今天我被老板炒了鱿鱼”），系统就会瞬间崩溃。
+\end{enumerate}
+
+事实证明：\textbf{靠人类肉眼穷举语言规则是死路一条。}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[图表] 三、第二代：统计语言模型与 N-gram（1990s - 2000s）}
+
+既然人工写规则走不通，统计学家们提出了全新思路：\textbf{不要人工写规则，让计算机去统计真实人类书写的大量文章！}
+
+\subsection{什么是“语言模型（Language Model）”？}
+
+数学家对语言模型的定义极其质朴：
+\begin{noteBox}[核心导读与背景]
+\textbf{语言模型，就是一个计算“一句话在现实世界中出现的概率”的数学函数。}
+\end{noteBox}
+
+例如，对于两句话：
+\begin{itemize}
+  \item $S_1$ = “今天天气真好”
+  \item $S_2$ = “好真天气今天”
+\end{itemize}
+
+一个好的语言模型应该计算出：$P(S_1) = 0.05$（很常见），而 $P(S_2) = 0.0000001$（人类几乎不这么说）。
+
+根据概率论的\textbf{链式法则（Chain Rule）}，一句话出现的联合概率，等于逐个词出现的条件概率相乘：
+
+\[
+P(w_1, w_2, w_3, \dots, w_n) = P(w_1) \times P(w_2 \mid w_1) \times P(w_3 \mid w_1, w_2) \dots \times P(w_n \mid w_1, \dots, w_{n-1})
+\]
+
+这个公式看似完美，但计算机在实际计算时崩溃了：
+当句子长达 20 个字时，条件概率 $P(w_{20} \mid w_1, \dots, w_{19})$ 要求计算机去统计：\textbf{在历史上所有文章中，前面 19 个字完全一模一样的情况下，第 20 个字是 $w_{20}$ 的频率}。
+现实中，哪怕整个互联网的所有文本加起来，前面 19 个字完全一样的概率也几乎是 \textbf{0}！这就是著名的\textbf{「数据稀疏与维度灾难」}。
+
+\subsection{N-gram 的妥协（马尔可夫假设）}
+
+为了能算出来，统计学家做了一个妥协：\textbf{假定第 $t$ 个词出现的概率，只与它前面的 $N-1$ 个词有关，跟更早以前的词完全无关！}
+\begin{itemize}
+  \item \textbf{2-gram（Bi-gram）}：每个词只看前 1 个词：$P(w_t \mid w_1, \dots, w_{t-1}) \approx P(w_t \mid w_{t-1})$
+  \item \textbf{3-gram（Tri-gram）}：每个词只看前 2 个词：$P(w_t \mid w_1, \dots, w_{t-1}) \approx P(w_t \mid w_{t-2}, w_{t-1})$
+\end{itemize}
+
+\subsection{致命死穴：}
+
+\begin{enumerate}
+  \item \textbf{短视，无法理解长文本}：如果你写一篇文章，开头说“小明是个法国人\dots{}\dots{}”，在经过 500 字后问“他最擅长的母语是\_\_\_”，N-gram 只看前两个词，根本不可能答对。
+  \item \textbf{没有任何概念理解}：在统计模型中，“苹果”和“梨”是两个完全不相关的独立符号。即使模型见过“我吃了一个苹果”，它也无法推断出“我吃了一个梨”是否合理。
+\end{enumerate}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[决策] 四、第三代：分布式词向量与循环神经网络（2010s）}
+
+2013 年，Google 提出了里程碑式的 \textbf{Word2Vec}，彻底颠覆了符号表示法。
+
+\subsection{核心飞跃：词嵌入向量（Word Embedding）}
+
+人类想通了：\textbf{不要用离散的孤立代号表示词，而是把每个词表示为高维空间里的一个坐标点（一个向量，比如 512 个数字）！}
+\begin{itemize}
+  \item 著名的语言学假设：\textit{“一个词的含义，由它经常与哪些词同时出现所决定（Distributional Hypothesis）。”}
+  \item 如果把词映射到多维空间中，在大量文本训练后，你会惊奇地发现数学几何与人类常识奇迹般地重合了：
+\end{itemize}
+
+\[
+\vec{v}_{\text{国王}} - \vec{v}_{\text{男人}} + \vec{v}_{\text{女人}} \approx \vec{v}_{\text{王后}}
+\]
+
+  “苹果”和“梨”在空间中的距离会非常近，而“苹果”和“量子力学”距离极远。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\subsection{补齐底座：什么是神经网络？它是怎么“学会”知识的？}
+
+\begin{tipBox}[核心直觉与思考]
+{}[思考] \textbf{很多教材直接从词向量跳到 RNN，导致零基础同学一头雾水。到底什么是“神经元”？什么是“隐藏层”？它到底是怎么从数据中学习的？我们用最接地气的生活例子彻底讲明白。}
+\end{tipBox}
+
+\subsubsection{(1) 单个人工神经元：一个带旋钮的打分器}
+
+生物学中，人脑神经元通过树突接收多个电信号，在细胞核汇总，超过一定阈值后通过轴突激发传递。
+数学家把这个过程抽象成了一个极其简单的数学公式：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[scale=0.88, >=stealth,
+  input/.style={rectangle, rounded corners=2pt, draw=secondary, fill=secondary!10, font=\sffamily\footnotesize},
+  weight/.style={rectangle, rounded corners=2pt, draw=primary, fill=primary!10, font=\sffamily\footnotesize},
+  neuron/.style={circle, draw=warnred, fill=warnred!10, font=\sffamily\footnotesize\bfseries, minimum size=0.9cm}
+]
+  \node[input] (x1) at (0, 1.5) {特征 $x_1$ (离地铁距离)};
+  \node[input] (x2) at (0, 0) {特征 $x_2$ (房屋面积)};
+  \node[input] (x3) at (0, -1.5) {特征 $x_3$ (是否带学区)};
+  
+  \node[weight] (w1) at (3.2, 1.5) {权重 $w_1$};
+  \node[weight] (w2) at (3.2, 0) {权重 $w_2$};
+  \node[weight] (w3) at (3.2, -1.5) {权重 $w_3$};
+  
+  \node[neuron] (sum) at (6.0, 0) {$\sum w_i x_i + b$};
+  \node[weight, fill=tipgreen!15, draw=tipgreen] (act) at (8.5, 0) {激活函数 $f$};
+  \node[input, fill=primary!15, draw=primary] (out) at (10.8, 0) {预测输出 $\hat{y}$};
+  
+  \draw[->, thick] (x1) -- (w1);
+  \draw[->, thick] (x2) -- (w2);
+  \draw[->, thick] (x3) -- (w3);
+  
+  \draw[->, thick] (w1) -- (sum);
+  \draw[->, thick] (w2) -- (sum);
+  \draw[->, thick] (w3) -- (sum);
+  
+  \draw[->, thick] (sum) -- (act);
+  \draw[->, thick] (act) -- (out);
+\end{tikzpicture}
+\caption{单神经元（感知机）加权求和与非线性激活计算图}
+\end{figure}
+
+\begin{enumerate}
+  \item \textbf{输入（$x_1, x_2, x_3$）}：客观事实数据。
+  \item \textbf{权重（Weights, $w_1, w_2, w_3$）}：\textbf{每个因素在决策中占多大分量（重要程度）}。
+\end{enumerate}
+
+\begin{itemize}
+  \item 如果你极度看重学区，学区权重 $w_3$ 就会调得非常大；
+  \item 如果你不在乎价格，价格权重 $w_2$ 就会接近 0。
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{偏置（Bias, $b$）}：基础门槛/自身倾向性（比如你天生买房意愿就很强，即使条件一般也想买，$b$ 就是正数）。
+  \item \textbf{加权求和}：
+\end{enumerate}
+
+\[
+z = w_1 x_1 + w_2 x_2 + w_3 x_3 + b = \sum_{i=1}^n w_i x_i + b
+\]
+
+\subsubsection{(2) 为什么必须有「激活函数（Activation Function）」？}
+
+如果神经元只做 $z = \sum w_i x_i + b$ 这种加减乘除，它在数学上叫\textbf{线性变换}。
+线性变换的致命缺陷是：\textbf{无论你把多少个神经元串联在一起，100 层的线性变换在代数上依然完全等价于仅仅只有 1 层！}
+
+\[
+W_2(W_1 x + b_1) + b_2 = (W_2 W_1) x + (W_2 b_1 + b_2) = W_{\text{new}} x + b_{\text{new}}
+\]
+
+这意味着，没有非线性激活，多层神经网络就丧失了深度的意义，根本无法拟合现实世界中千变万化的曲折规律！
+
+\textbf{激活函数（如 $\text{ReLU}$、$\text{Sigmoid}$、$\tanh$）}就像是一个“非线性开关”：
+\begin{itemize}
+  \item 它将输入进来的线性加权和，通过曲线进行扭曲与折叠；
+  \item 有了激活函数，多层神经网络就能像折纸一样，在多维空间中折叠出极其复杂的曲面，\textbf{理论上可以逼近宇宙中任意复杂的数学函数}（通用近似定理 Universal Approximation Theorem）！
+\end{itemize}
+
+\subsubsection{(3) 什么是多层神经网络与“隐藏层（Hidden Layer）”？}
+
+把成百上千个神经元分层排列，前一层的输出作为后一层的输入，就组成了\textbf{多层感知机（MLP / 神经网络）}：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[scale=0.9, >=stealth,
+  nodeIn/.style={rectangle, rounded corners=2pt, draw=secondary, fill=secondary!10, font=\sffamily\scriptsize, inner sep=3pt},
+  nodeHid/.style={circle, draw=primary, fill=primary!10, font=\sffamily\scriptsize, inner sep=2pt},
+  nodeOut/.style={rectangle, rounded corners=2pt, draw=warnred, fill=warnred!10, font=\sffamily\scriptsize, inner sep=3pt}
+]
+  \node[font=\sffamily\footnotesize\bfseries, align=center] at (0, 2.3) {输入层\\[-0.1em]\scriptsize (Input)};
+  \node[font=\sffamily\footnotesize\bfseries, align=center] at (3.5, 2.3) {隐藏层 1\\[-0.1em]\scriptsize (Hidden 1)};
+  \node[font=\sffamily\footnotesize\bfseries, align=center] at (6.5, 2.3) {隐藏层 2\\[-0.1em]\scriptsize (Hidden 2)};
+  \node[font=\sffamily\footnotesize\bfseries, align=center] at (10.0, 2.3) {输出层\\[-0.1em]\scriptsize (Output)};
+  
+  \foreach \i in {1, 2, 3} {
+    \node[nodeIn] (in\i) at (0, 2.0 - \i*1.0) {输入特征 $x_\i$};
+    \node[nodeHid] (h1\i) at (3.5, 2.0 - \i*1.0) {$h_{1,\i}$};
+    \node[nodeHid] (h2\i) at (6.5, 2.0 - \i*1.0) {$h_{2,\i}$};
+    \node[nodeOut] (out\i) at (10.0, 2.0 - \i*1.0) {词表 Logits $\hat{y}_\i$};
+  }
+  
+  \foreach \i in {1, 2, 3} {
+    \foreach \j in {1, 2, 3} {
+      \draw[->, gray!50] (in\i) -- (h1\j);
+      \draw[->, gray!50] (h1\i) -- (h2\j);
+      \draw[->, gray!50] (h2\i) -- (out\j);
+    }
+  }
+\end{tikzpicture}
+\caption{多层感知机（MLP）特征变换与全连接信息流动图}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{为什么叫“隐藏层”？}
+\end{itemize}
+
+  因为输入是人类给的文字，输出是最终的预测结果，这两头都是看得见摸得着的。而中间这些层，是\textbf{计算机内部自主形成的高维抽象概念表征（Representation）}，人类很难直接用一两个词去定义中间神经元到底在想什么，因此被称为“隐藏状态（Hidden State）”。
+
+\subsubsection{(4) 神经网络是怎么“学习”的？（损失函数与反向传播）}
+
+网络搭好了，但一开始里面的权重旋钮（$W$ 和 $b$）全是\textbf{随机初始化的乱码}。它怎么学会人类知识的？
+这个学习过程完全模拟了人类的“犯错-反省-改正”机制：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[scale=0.92, >=stealth,
+  stepBox/.style={rectangle, rounded corners=3pt, draw=primary, fill=primary!6, font=\sffamily\footnotesize, align=center, inner sep=5pt}
+]
+  \node[stepBox] (s1) at (0, 0) {输入数据 $X$};
+  \node[stepBox, fill=secondary!10, draw=secondary] (s2) at (4.0, 0) {前向传播计算\\(网络前向推理)};
+  \node[stepBox] (s3) at (8.5, 0) {模型预测值 $\hat{Y}$};
+  \node[stepBox, fill=warnred!10, draw=warnred] (s4) at (8.5, -2.0) {计算损失 (Loss)\\与真实标签 $Y$ 对比};
+  \node[stepBox, fill=tipgreen!10, draw=tipgreen] (s5) at (4.0, -2.0) {反向传播 (Backward)\\计算各参数梯度 $\nabla_\theta L$};
+  \node[stepBox] (s6) at (0, -2.0) {优化器更新参数\\$\theta \leftarrow \theta - \eta \nabla L$};
+  
+  \draw[->, very thick, primary] (s1) -- (s2);
+  \draw[->, very thick, primary] (s2) -- (s3);
+  \draw[->, very thick, warnred] (s3) -- (s4);
+  \draw[->, very thick, tipgreen] (s4) -- (s5);
+  \draw[->, very thick, tipgreen] (s5) -- (s6);
+  \draw[->, thick, dashed, primary] (s6) -- (s1) node[midway, left, font=\scriptsize\sffamily] {迭代下一轮};
+\end{tikzpicture}
+\caption{深度学习模型训练闭环：前向计算、损失衡量与反向梯度传播}
+\end{figure}
+
+\begin{enumerate}
+  \item \textbf{第一步（前向瞎猜）}：给模型输入“太阳从东边”，模型一顿乱算，吐出下一个字是“西瓜”。
+  \item \textbf{第二步（算差距 Loss）}：损失函数发现标准答案是“升”，预测概率和事实差了十万八千里，给出一个很大的惩罚分数（Loss）。
+  \item \textbf{第三步（反向算责任）}：利用高等数学的\textbf{链式求导法则（Chain Rule）}，从后向前计算输出误差对每一个权重参数的偏导数（称为\textbf{梯度 Gradient}）。梯度告诉我们：“如果把第 354 号旋钮稍微拧大一点，总误差就会减小！”
+  \item \textbf{第四步（更新旋钮）}：按照梯度的相反方向，微调所有的权重参数（这个过程叫\textbf{梯度下降}）。
+  \item \textbf{重复数十亿次}：当把互联网上几万亿个词喂给模型，历经成百上千卡 GPU 几个月的日夜调整，所有的旋钮都达到了极致精密的和谐状态——大模型就此诞生！
+\end{enumerate}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\subsection{为什么传统神经网络处理文本会崩溃？循环神经网络（RNN）的诞生}
+
+搞懂了基础神经网络，我们立刻面临一个致命挑战：
+\textbf{传统的神经网络，输入大小必须是固定的！}
+\begin{itemize}
+  \item 比如设计一个能输入 3 个词的网络，它就只能吃 3 个词；
+  \item 但人类说话有长有短，有的问句只有 2 个字（“在吗？”），有的文章长达 1 万字！
+  \item 怎么让同一个神经网络，既能读短句，又能读长文呢？
+\end{itemize}
+
+科学家为此设计了\textbf{循环神经网络（Recurrent Neural Network, RNN）}。
+RNN 的核心构想是：\textbf{网络结构固定不变，但配一个随时更新的“备忘录小本子（隐藏状态 $h_t$）”！}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[scale=0.9, >=stealth,
+  cell/.style={rectangle, rounded corners=3pt, draw=primary, fill=primary!10, font=\sffamily\footnotesize\bfseries, minimum width=2.4cm, minimum height=1.0cm},
+  io/.style={rectangle, rounded corners=2pt, draw=secondary, fill=secondary!8, font=\sffamily\scriptsize}
+]
+  \node[io] (x1) at (0, 0) {$x_1$ (\texttt{"我"})};
+  \node[cell] (rnn1) at (0, 1.8) {RNN 单元};
+  \node[io, fill=tipgreen!10, draw=tipgreen] (h1) at (0, 3.6) {隐状态 $h_1$};
+  
+  \node[io] (x2) at (4.0, 0) {$x_2$ (\texttt{"喜欢"})};
+  \node[cell] (rnn2) at (4.0, 1.8) {RNN 单元};
+  \node[io, fill=tipgreen!10, draw=tipgreen] (h2) at (4.0, 3.6) {隐状态 $h_2$};
+  
+  \node[io] (x3) at (8.0, 0) {$x_3$ (\texttt{"大模型"})};
+  \node[cell] (rnn3) at (8.0, 1.8) {RNN 单元};
+  \node[io, fill=tipgreen!10, draw=tipgreen] (h3) at (8.0, 3.6) {隐状态 $h_3$};
+  
+  \draw[->, thick] (x1) -- (rnn1);
+  \draw[->, thick] (rnn1) -- (h1);
+  \draw[->, thick] (x2) -- (rnn2);
+  \draw[->, thick] (rnn2) -- (h2);
+  \draw[->, thick] (x3) -- (rnn3);
+  \draw[->, thick] (rnn3) -- (h3);
+  
+  \draw[->, very thick, warnred] (rnn1) -- (rnn2) node[midway, above, font=\tiny\sffamily] {时序记忆传递};
+  \draw[->, very thick, warnred] (rnn2) -- (rnn3) node[midway, above, font=\tiny\sffamily] {语境累加};
+\end{tikzpicture}
+\caption{循环神经网络（RNN）沿时序展开的信息流动机制}
+\end{figure}
+
+每个时间步 $t$，同一个 RNN 网络只接收两样东西：
+\begin{enumerate}
+  \item \textbf{上一步传过来的备忘录} $h_{t-1}$
+  \item \textbf{当前进来的这 1 个新词} $x_t$
+\end{enumerate}
+
+通过矩阵乘法与激活函数更新备忘录：
+
+\[
+h_t = \tanh(W_h h_{t-1} + W_x x_t + b)
+\]
+
+其中：
+\begin{itemize}
+  \item $W_x$ 是针对新词的权重矩阵；
+  \item $W_h$ 是针对历史备忘录的权重矩阵；
+  \item $\tanh$ 是激活函数，把所有数字压缩在 $[-1, 1]$ 之间，防止数值无休止放大。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\subsection{为什么强大的 RNN 和 LSTM 最终被历史无情淘汰？}
+
+尽管 LSTM 和 GRU 引入了复杂的门控机制，但在大模型时代，RNN 撞上了一堵无法逾越的物理高墙：
+
+\begin{enumerate}
+  \item \textbf{信息串行的「传话游戏」缺陷（长程遗忘与梯度消失）}：
+\end{enumerate}
+
+\begin{itemize}
+  \item 文本必须一个词接一个词地顺序传递。如果一句话长达 1000 个词，第 1 个词的信息必须经历 1000 次矩阵乘法才能到达末尾。
+  \item 在数学上，多次连乘会导致浮点数的\textbf{梯度消失（数值缩小到 0）}或\textbf{梯度爆炸（数值溢出为 NaN）}。哪怕最先进的 LSTM，在超过 100\textasciitilde{}200 个词后，对前文的记忆也基本荡然无存。
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{算力杀手：完全无法在 GPU 上并行训练！}
+\end{enumerate}
+
+\begin{itemize}
+  \item 现代 GPU 内部有上万个计算核心，GPU 最强大的地方在于\textbf{同一毫秒同时做数千个矩阵相乘}。
+  \item 但是 RNN 要求：\textbf{必须先算完第 1 个词，拿到 $h_1$ 之后，才能算第 2 个词；算完第 2 个词才能算第 3 个词！}
+  \item 意味着 99\% 的 GPU 核心只能闲置排队等待！训练速度慢如蜗牛，根本无法利用海量互联网数据进行缩放（Scale）。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[加速] 五、第四代：Transformer 的横空出世（2017 至今）}
+
+2017 年，Google 发表了震动整个 AI 领域的著名论文：
+\textbf{《Attention Is All You Need》（注意力就是你所需要的一切）}。
+
+Transformer 做出了一个在当时看似离经叛道、甚至疯狂的决定：
+\begin{noteBox}[核心导读与背景]
+\textbf{彻底抛弃所有的循环（RNN）和时间步串行连接！一个都不留！}
+\end{noteBox}
+
+\subsection{Transformer 为什么能一统天下？}
+
+\begin{enumerate}
+  \item \textbf{任意两词之间距离永远是 $O(1)$}：
+\end{enumerate}
+
+\begin{itemize}
+  \item 不管一篇文章有 10 个词还是 10 万个词，Transformer 的\textbf{自注意力机制（Self-Attention）}让文章中任意一个词与另一个词之间，直接通过矩阵点积相连。
+  \item 第 1 个词和第 10000 个词可以直接打分产生关联，不再有任何“传话游戏”的信息衰减！
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{天然契合 GPU 的暴力并行计算}：
+\end{enumerate}
+
+\begin{itemize}
+  \item 一整篇文章输入进来，所有词的 Q、K、V 投影矩阵\textbf{在一瞬间同时相乘完成}！
+  \item GPU 的成千上万个核心全负荷拉满运转，训练吞吐量相比 RNN 提升了几个数量级。
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{奠定了如今大模型（LLM）的基石}：
+\end{enumerate}
+
+\begin{itemize}
+  \item 正是因为能在海量 GPU 集群上并行计算，才使得人类能够把整个维基百科、GitHub 源码、电子书全部喂给模型，催生了 GPT-3、GPT-4、Llama、Qwen 等如今震撼世界的超级大模型。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[目标] 总结与下一章预告}
+
+回顾人类探寻机器理解语言的 70 年历程：
+\begin{enumerate}
+  \item \textbf{人工规则}：因语言的无限歧义性与复杂性而崩溃；
+  \item \textbf{统计 N-gram}：因缺乏语义理解与上下文数据稀疏而停滞；
+  \item \textbf{循环神经网络 RNN}：引入连续词向量，但因信息串行传递无法长久记忆，且无法利用现代 GPU 并行算力而遭淘汰；
+  \item \textbf{Transformer}：以完全并行的自注意力机制一统天下，成为当今所有大模型的唯一通用底座。
+\end{enumerate}
+
+在下一篇中，我们将\textbf{从最基础的初等数学起步}，推导并理解：
+\begin{itemize}
+  \item 什么是向量与空间变换？
+  \item 两个词向量为什么做「点积」就能代表语义相似度？
+  \item 深度学习中最常用的归一化函数 Softmax 是怎么来的？（它的导数为什么那么优雅，在第 3 篇推导）
+\end{itemize}
+
+\begin{warningBox}[避坑指南与核心警示]
+{}[重点] 本篇为了控制篇幅，跳过了两段重要的历史：\textbf{2003 年第一个神经语言模型}，以及 \textbf{2014 年 Seq2Seq 的信息瓶颈如何催生了注意力机制}。另外本篇 §4.2 讲神经网络如何"学习"只是比喻，严格的数学在第 3 篇。它们分别在：
+- \textbf{第 3 篇：导数、链式法则、反向传播与交叉熵}
+- \textbf{第 5 篇：从原版 Transformer 到 Llama / DeepSeek} §1
+\end{warningBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\textbf{上一篇}：\textbf{第 0 篇（导读）：AI 深度学习全景族谱与零基础入门指南} ｜ \textbf{下一篇}：\textbf{第 2 篇：零基础必备数学直觉：向量、空间变换、点积与 Softmax 深度推导} ｜ \textbf{总路线}：\textbf{LEARNING\_PATH.md}

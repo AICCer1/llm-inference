@@ -1,0 +1,64 @@
+\chapter{PagedAttention（分页显存分配机制）仿真}
+
+\section{Lab 12b：PagedAttention、写时复制、前缀缓存与 Chunked Prefill}
+
+\begin{noteBox}[核心导读与背景]
+对应理论：\textbf{第 12 篇：推理服务系统}
+前置：第 6 篇、Lab 12a、第 8 篇、第 9 篇（Online Softmax）。
+依赖：NumPy。
+\end{noteBox}
+
+\begin{noteBox}[核心导读与背景]
+{}[计时] 以下计时类数字是本机某一次运行的\textbf{量级示例}（显卡空闲、已预热）。它是\textbf{第 8 篇耗时模型的推算}，不是真实 kernel 的实测，请看趋势和比例。
+\end{noteBox}
+
+\section{运行}
+
+\begin{lstlisting}[language=bash]
+.venv/bin/python lab12b_paged_attention/paged_kv_cache_sim.py
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3.5cm} X}
+\toprule
+\textbf{实验} & \textbf{你会看到} \\
+\midrule
+1. 分页注意力 & 三个请求交替写入，物理块号杂乱（如 \texttt{[49, 26, 32, 50]}），逐块 Online Softmax 结果与连续存储误差 \textasciitilde{}1e-16 \\
+2. 显存利用率 & 同样 64K token 的显存：预留 \texttt{max\_len} 只能服务 32 个请求（浪费 78\%），分页可服务 144 个（浪费 1.7\%） \\
+3. 写时复制 & 并行采样 n=4：共享提示词块只存一份，只有"共享且未写满"的最后一块被复制，而且只复制 n−1 次（最后一个子序列可原地写入），省 50\% \\
+4. 前缀缓存 & 1000 token 系统提示词：84\% 的 token 免去 Prefill；改掉第 1 个 token 后缓存全部失效 \\
+5. Chunked Prefill & 6000 token 长提示词插队：不切块时所有 Decode 用户卡顿 390ms；切成 256 一块后最长卡顿 22ms（代价是 TTFT 从 390ms 涨到 506ms） \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{代码结构}
+
+\begin{itemize}
+  \item \texttt{BlockAllocator}：空闲链表 + 引用计数（$\approx$ 操作系统的物理页框管理）
+  \item \texttt{PagedKVCache}：物理 KV 池 \texttt{[num\_blocks, 16, d]} + 每个序列一张块表；\texttt{append} 里实现按需分配与写时复制；\texttt{attention} 按块表逐块读取并用 Online Softmax 累加
+\end{itemize}
+
+这就是 vLLM 的 \texttt{BlockManager} 与 PagedAttention kernel 的核心逻辑，去掉了 GPU 与多层细节。
+
+\section{动手练习}
+
+\begin{enumerate}
+  \item 给 \texttt{BlockAllocator} 加上 LRU 淘汰：请求结束后块不立即释放而是进入"可回收缓存"，把实验 4 的前缀缓存和实验 2 的分配器真正接在一起。
+  \item 实现抢占：显存不足时选择最晚到达的请求，分别实现"换出到 CPU"与"丢弃后重算"，用第 8 篇的耗时模型比较两者代价（提示：PCIe 带宽约 25 GB/s，Prefill 的算力受限耗时见实验 5）。
+  \item 把块大小改成 1、16、128，观察实验 2 的浪费率与"块表长度"之间的权衡（块太小，块表和 kernel 里的间接寻址开销变大）。
+  \item （阅读）对照 vLLM 源码中 KV Cache 管理与调度器相关的模块（在官方文档 Design 部分可以找到架构说明），找到与本文件中每个函数对应的地方。
+\end{enumerate}
+
+
+
+\section{实验核心源码精选与解析}
+
+本实验配套有完整可运行的工业级验证代码，重点实现细节如下：
+
+
+\subsection{源码实现：\texttt{paged\_kv\_cache\_sim.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{paged\_kv\_cache\_sim.py}}]{code/lab12b_paged_attention_paged_kv_cache_sim.py}
+

@@ -1,0 +1,179 @@
+\chapter{工业量化机制（RTN / SmoothQuant / AWQ / GPTQ）实战}
+
+\section{Lab 11：模型量化技术 (INT8 / INT4 / FP8, AWQ, GPTQ)}
+
+\section{[目标] 什么是量化？为什么对推理如此重要？}
+
+在深度学习推理中，\textbf{量化（Quantization）是将高精度浮点数（如 FP32 / FP16）映射到低位宽定点数或微缩浮点数（如 INT8 / INT4 / FP8）的技术}。
+
+对于大模型推理，量化带来双重巨大收益：
+\begin{enumerate}
+  \item \textbf{显存容量降低}：70B 模型从 FP16 的 140GB 显存，经 INT4 压缩后仅需约 35GB，可以在单张或双张消费级显卡上加载。
+  \item \textbf{生成速度翻倍}：由于 Decode 阶段瓶颈在于显存带宽，将权重体积压缩至 1/4 后，显存读取时间直接缩短至 1/4，理论生成速度可提升至接近 4 倍！
+\end{enumerate}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[几何] 核心量化数学公式}
+
+\subsection{对称量化 (Symmetric Quantization)}
+
+将浮点零点映射为定点零点（即零偏置 $Z = 0$）：
+\begin{itemize}
+  \item 缩放因子（Scale）：
+\end{itemize}
+
+\[
+S = \frac{\max(|X|)}{2^{b-1} - 1}
+\]
+
+\begin{itemize}
+  \item 量化过程：
+\end{itemize}
+
+\[
+q = \text{clip}\left(\text{round}\left(\frac{X}{S}\right), -2^{b-1}+1, 2^{b-1}-1\right)
+\]
+
+\begin{itemize}
+  \item 反量化（Dequantization）：
+\end{itemize}
+
+\[
+\hat{X} = q \times S
+\]
+
+\subsection{非对称量化 (Asymmetric / Affine Quantization)}
+
+当数据分布具有明显单边偏置时，引入零点 Zero-point ($Z$)：
+\begin{itemize}
+  \item 缩放因子与零点：
+\end{itemize}
+
+\[
+S = \frac{X_{\max} - X_{\min}}{2^b - 1}
+\]
+
+\[
+Z = \text{round}\left(-\frac{X_{\min}}{S}\right)
+\]
+
+\begin{itemize}
+  \item 量化与反量化：
+\end{itemize}
+
+\[
+q = \text{clip}\left(\text{round}\left(\frac{X}{S}\right) + Z, 0, 2^b - 1\right)
+\]
+
+\[
+\hat{X} = (q - Z) \times S
+\]
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[模块] 量化粒度 (Granularity)}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{2.5cm} p{3.5cm} X X}
+\toprule
+\textbf{粒度模式} & \textbf{描述} & \textbf{硬件友好度} & \textbf{精度保持度} \\
+\midrule
+\textbf{Per-Tensor} & 整个张量共享一个 Scale & 最高（计算开销最小） & 最差（易受离群异常值干扰） \\
+\textbf{Per-Channel} & 矩阵的每个输出通道拥有独立的 Scale & 高 & 较好 \\
+\textbf{Per-Group (分组量化)} & 连续每 32 / 64 / 128 个权重组成一组独立量化（AWQ/GPTQ 标配；本仓库脚本用 \texttt{group\_size=32} 演示） & 中等 & \textbf{最好}（极大减小离群值污染范围） \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[思考] 工业级算法速览}
+
+\begin{enumerate}
+  \item \textbf{W4A16 (Weight-Only Quantization)}:
+\end{enumerate}
+
+\begin{itemize}
+  \item 权重存为 INT4，计算时在寄存器/SRAM 实时反量化为 FP16 与激活值做运算。
+  \item 代表：\textbf{AWQ (Activation-aware Weight Quantization)}（保护 1\% 关键特征通道）和 \textbf{GPTQ}（二阶 Hessian 误差补偿）。原理与实现见下方"进阶"。
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{W8A8 (Weight \& Activation Quantization)}:
+\end{enumerate}
+
+\begin{itemize}
+  \item 权重与激活值均量化为 INT8 或 FP8，直接使用硬件 INT8/FP8 Tensor Core 进行矩阵乘法，Prefill 和 Decode 均获加速。
+  \item 代表：\textbf{SmoothQuant}（通过数学等价变换将激活值的离群峰值转移给权重）。
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{FP8 量化（现代 GPU 标配）}:
+\end{enumerate}
+
+\begin{itemize}
+  \item Hopper/Ada/Blackwell 架构原生支持 E4M3 和 E5M2 两种 FP8 格式，几乎无损兼顾训练与推理。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[执行] 运行量化实验}
+
+运行 \textbf{\texttt{quant\_basics.py}}：
+
+\begin{lstlisting}[language=bash]
+python3 lab11_quantization/quant_basics.py
+\end{lstlisting}
+
+对比对称量化、非对称量化以及 Group-wise INT4 分组量化的重构误差（MSE）与信噪比（SNR）。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[实验] 进阶：从零实现 SmoothQuant / AWQ / GPTQ}
+
+原理推导见 \textbf{第 11 篇：量化}。
+
+\begin{lstlisting}[language=bash]
+.venv/bin/python lab11_quantization/advanced_quant_numpy.py
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3cm} p{4.5cm} X}
+\toprule
+\textbf{实验} & \textbf{本机结果} & \textbf{说明} \\
+\midrule
+每多 1 位 SNR +6 dB & INT7$\rightarrow$INT8 +6.1 dB & 误差方差 $S^2/12$ \\
+激活离群值 & 6 个离群通道让普通通道 INT8 SNR 只剩 10 dB & LLM.int8() 的发现 \\
+SmoothQuant & W8A8 输出 SNR 20.2 $\rightarrow$ 32.4 dB（$\alpha$=0.5） & 恒等变换，零推理开销 \\
+AWQ & W4 分组量化输出 SNR +2.9 dB，关键通道误差降为 1/2.6 & 放大关键通道再量化 \\
+GPTQ & 输出 SNR 18.2 $\rightarrow$ \textbf{29.6 dB}；但权重本身的误差反而更大 & 优化 $\|WX - \hat WX\|$ 而非 $\|W - \hat W\|$；输入不相关时毫无收益 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{动手练习}
+\begin{enumerate}
+  \item 把实验 5 的 GPTQ 改成\textbf{分组}量化（每 128 列一组各自一个 scale），与 AWQ 在同一份数据上比较。
+  \item 在 Lab 07b 的 Qwen2.5-0.5B 上，对所有线性层做 W4 分组 RTN 量化（反量化回 BF16 再计算），用一段文本测 PPL 变化；再换成你实现的 GPTQ，看能挽回多少。
+  \item 用第 8 篇的带宽公式估算：Qwen2.5-7B 在 5060 Ti 上从 BF16 换成 W4A16，Decode 理论上限从多少 token/s 变成多少？为什么 Prefill 不会同样变快？
+\end{enumerate}
+
+
+
+\section{实验核心源码精选与解析}
+
+本实验配套有完整可运行的工业级验证代码，重点实现细节如下：
+
+
+\subsection{源码实现：\texttt{quant\_basics.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{quant\_basics.py}}]{code/lab11_quantization_quant_basics.py}
+
+
+\subsection{源码实现：\texttt{advanced\_quant\_numpy.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{advanced\_quant\_numpy.py}}]{code/lab11_quantization_advanced_quant_numpy.py}
+

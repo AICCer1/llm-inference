@@ -1,0 +1,267 @@
+\chapter{什么是推理？自回归生成全生命周期与 KV Cache 代数证明}
+
+\begin{mathBox}[核心数学定理推导]
+\textbf{阅读前须知}：许多人以为大模型“训练”和“推理”是一回事，只是输入不同而已。本篇我们将彻底厘清大模型推理（Inference）的物理本质，推导为什么模型只能逐字生成，以及为什么一个小小的 KV Cache 会成为大模型显存爆炸的万恶之源与工程关键。
+\end{mathBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[对比] 一、训练（Training）vs 推理（Inference）的物理鸿沟}
+
+在讨论推理之前，我们必须先对比两者在底层运行模式上的根本差异：
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3cm} p{4.5cm} X}
+\toprule
+\textbf{对比维度} & \textbf{训练阶段 (Training)} & \textbf{推理阶段 (Inference)} \\
+\midrule
+\textbf{已知信息} & \textbf{全部已知}（整篇文章的所有字都摆在眼前） & \textbf{完全未知}（只知道用户的 Prompt，答复一无所知） \\
+\textbf{参数权重} & \textbf{频繁变动}（通过反向传播不断更新梯度） & \textbf{完全冻结}（只读参数，绝不更改） \\
+\textbf{计算模式} & \textbf{全序列完全并行}（所有 Token 一瞬间同时算完） & \textbf{自回归逐字串行}（像挤牙膏一样一个词一个词蹦） \\
+\textbf{显存杀手} & \textbf{激活值与优化器状态}（Adam 动量、权重梯度） & \textbf{模型权重与 KV Cache}（历史上下文缓存） \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{训练时的“上帝视角”（Teacher Forcing）}
+
+训练时，我们给模型一段完整的文字：“人工智能彻底改变了世界”。
+因为整句话都在显卡里，模型可以在\textbf{一次前向计算中，同时预测所有位置的下一个词}：
+\begin{itemize}
+  \item 位置 1 的特征去预测“智能”；
+  \item 位置 2 的特征去预测“彻底”；
+  \item 位置 3 的特征去预测“改变”\dots{}\dots{}
+\end{itemize}
+
+成千上万个词的预测误差在这一瞬间同时算出，然后梯度反向传播一次性更新全部参数。这就是为什么训练高度并行。
+
+\subsection{推理时的“摸黑前行”（自回归 Autoregressive Loop）}
+
+推理时，用户发来一个问题：“北京的特产是什么？”
+模型此时根本不知道后续几百个字是什么，它只能像盲人摸象一样，玩一个\textbf{接龙游戏}：
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{1.8cm} X l}
+\toprule
+\textbf{解码步数} & \textbf{模型前向输入上下文（Context Tokens）} & \textbf{预测输出下一个 Token} \\
+\midrule
+第 1 步 & \texttt{["北京", "的", "特产", "是", "什么", "？"]} & \textbf{"烤"} \\
+第 2 步 & \texttt{["北京", "的", "特产", "是", "什么", "？", "烤"]} & \textbf{"鸭"} \\
+第 3 步 & \texttt{["北京", "的", "特产", "是", "什么", "？", "烤", "鸭"]} & \textbf{"。"}（触发 EOS 停止） \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{上一步自己吐出来的词，拼入原句作为下一步的输入，周而复始，直到吐出结束标记 \texttt{$<$eos$>$} 为止。这就是大模型自回归推理的全部物理本质！}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[加速] 二、推理的两大完全不同阶段：Prefill 与 Decode}
+
+在大模型推理系统（如 vLLM、TensorRT-LLM）中，你会每天听到两个术语：\textbf{Prefill（预填充）} 与 \textbf{Decode（解码）}。它们两者的硬件瓶颈截然相反！
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3.0cm} X X}
+\toprule
+\textbf{特征维度} & \textbf{阶段 1：Prefill 阶段 (首字计算)} & \textbf{阶段 2：Decode 阶段 (增量生成)} \\
+\midrule
+\textbf{输入形态} & 一次性输入全部 Prompt (如 1000 字) & 每次仅输入最新生成的 \textbf{1 个 Token} \\
+\textbf{计算模式} & 大规模矩阵乘法 (GEMM) & 极小规模矩阵-向量乘法 (GEMV) \\
+\textbf{硬件瓶颈} & \textbf{算力受限 (Compute-Bound)}，核心满载 & \textbf{访存受限 (Memory-Bound)}，带宽跑满 \\
+\textbf{核心考核指标} & \textbf{TTFT} (首字时间，用户等待延迟) & \textbf{TPOT} (每字时间，流式打字流畅度) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[观察] 三、KV Cache 的代数展开与冗余消除证明}
+
+现在我们进入推理系统中最核心的概念：\textbf{KV Cache}。
+
+\subsection{朴素自回归计算中的重复劳动（无 KV Cache）}
+
+假设当前已经生成到了第 $t$ 个词，序列为 $[x_1, x_2, \dots, x_{t-1}, x_t]$。
+我们要预测第 $t+1$ 个词。
+
+根据 Transformer 注意力机制：
+\begin{enumerate}
+  \item 计算整个序列的 Query、Key、Value：
+\end{enumerate}
+
+\[
+Q_{1:t} = [x_1 W_q; x_2 W_q; \dots; x_t W_q]
+\]
+
+\[
+K_{1:t} = [x_1 W_k; x_2 W_k; \dots; x_t W_k]
+\]
+
+\[
+V_{1:t} = [x_1 W_v; x_2 W_v; \dots; x_t W_v]
+\]
+
+\begin{enumerate}
+  \item 预测下一个词时，我们\textbf{只关心最后一个位置的 Query}：$q_t = x_t W_q$。
+  \item 最后一个位置的注意力加权计算为：
+\end{enumerate}
+
+\[
+\text{Output}_t = \text{softmax}\left(\frac{q_t K_{1:t}^T}{\sqrt{d_k}}\right) V_{1:t}
+\]
+
+\subsubsection{仔细看这里的 $K_{1:t}$ 和 $V_{1:t}$：}
+
+\[
+K_{1:t} = [ \underbrace{x_1 W_k, x_2 W_k, \dots, x_{t-1} W_k}_{\text{历史前 } t-1 \text{ 个词的 Key}}, \quad x_t W_k ]
+\]
+
+\[
+V_{1:t} = [ \underbrace{x_1 W_v, x_2 W_v, \dots, x_{t-1} W_v}_{\text{历史前 } t-1 \text{ 个词的 Value}}, \quad x_t W_v ]
+\]
+
+\textbf{发现了什么惊人的事实？}
+\begin{itemize}
+  \item 权重矩阵 $W_k$ 和 $W_v$ 是固定冻结的；
+  \item 历史上的词 $x_1, x_2, \dots, x_{t-1}$ 是已经说出来的话，绝不会再改变！
+  \item 这意味着：\textbf{前面 $t-1$ 个词的 Key 和 Value 向量，在第 $t-1$ 步时就已经原模原样算过一次了！}
+  \item 如果不保存它们，每生成一个新词，都要把前面所有历史词重新投影一遍。当文本长达 4000 字时，第 4001 步要把前 4000 个词的投影全量重算一遍！总计算量呈二次方 $O(T^2)$ 暴增，生成速度越来越慢！
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\subsection{KV Cache 的工程解法：以显存换算力}
+
+既然历史的 Key 和 Value 永远不会变，那我们\textbf{在第一次算出它们时，就直接保存在显存的缓存池中（KV Cache）}！
+
+\begin{mathBox}[第 $t$ 步推理：KV Cache 增量运算过程]
+\begin{enumerate}
+  \item \textbf{单向量投影}：仅对最新生成的单个 Token 向量 $x_t \in \mathbb{R}^{1 \times d_{\mathrm{model}}}$ 计算投影：
+  \[
+  q_t = x_t W_q, \quad k_t = x_t W_k, \quad v_t = x_t W_v
+  \]
+  \item \textbf{更新增量缓存}：将新产生的单步 $k_t, v_t$ 追加到已有显存缓存中：
+  \[
+  K_{\mathrm{all}} = \begin{bmatrix} K_{\mathrm{cache}} \\ k_t \end{bmatrix}, \quad V_{\mathrm{all}} = \begin{bmatrix} V_{\mathrm{cache}} \\ v_t \end{bmatrix}
+  \]
+  \item \textbf{注意力打分}：单向量 $q_t$ 与整个长序列 $K_{\mathrm{all}}$ 做矩阵乘法，得到 $[1, t]$ 注意力分布，再加权 $V_{\mathrm{all}}$ 得出输出向量！
+\end{enumerate}
+\end{mathBox}
+
+\subsection{复杂度代数对比：}
+
+\begin{itemize}
+  \item \textbf{无 KV Cache}：每次前向需要做整个矩阵的投影 $O(t \cdot d_{\text{model}}^2)$，总共生成 $T$ 步需要累计 $O(T^2 \cdot d_{\text{model}}^2)$ 次计算。
+  \item \textbf{有 KV Cache}：每次前向只需做单个向量的投影 $O(1 \cdot d_{\text{model}}^2)$，总计算量降为 $O(T \cdot d_{\text{model}}^2)$！
+\end{itemize}
+
+\textbf{投影与 FFN 这类"逐 token"矩阵乘法的总计算量少了一个因子 $T$（而不是常数倍）。}
+
+\begin{warningBox}[避坑指南与核心警示]
+{}[注意] \textbf{严谨补充（容易被忽略）}：KV Cache 消除的是"对历史 token 重复做投影 / FFN"的冗余，\textbf{并没有消除注意力本身的二次方}：
+第 $t$ 步里，新的 $q_t$ 仍然要和缓存中全部 $t$ 个 $k$ 做点积、再对 $t$ 个 $v$ 加权，代价是 $O(t \cdot d)$。累加 $T$ 步后注意力部分仍是 $O(T^2 d)$。
+所以"有 Cache 后每步耗时恒定"只在 $t \cdot d \ll d_{\text{model}}^2$（上下文不长）时近似成立；上下文变长后，每一步都要从显存\textbf{读一遍整个 KV Cache}，这正是长上下文 Decode 变慢、以及 FlashDecoding / GQA / MLA / KV 量化出现的原因（见第 8、9、12 篇）。
+\end{warningBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[隐患] 四、KV Cache 的代价：显存爆炸与 PagedAttention 的诞生}
+
+天下没有免费的午餐。KV Cache 用空间换取了时间，但带来了一个极度致命的副作用：\textbf{显存空间被疯狂吞噬！}
+
+\subsection{KV Cache 显存占用精确公式推导}
+
+对于一个大模型：
+\begin{itemize}
+  \item 层数 $L$（每一层 Transformer 都有自己独立的 $K$ 和 $V$）
+  \item 隐藏层维度 $H$
+  \item 上下文总长度 $S$（输入的 Prompt 词数 + 已生成的词数）
+  \item 并发请求数 $B$（Batch Size，同时服务的用户数）
+  \item 浮点精度字节数 $b$（FP16/BF16 每个数字占 2 字节）
+\end{itemize}
+
+每个词需要存储一个 Key 向量（$H$ 个数字）和一个 Value 向量（$H$ 个数字），跨越全部 $L$ 层：
+
+\[
+\text{每个 Token 的 KV 显存} = 2 \times L \times H \times b \quad \text{(字节)}
+\]
+
+如果同时服务 $B$ 个用户，平均每个请求长 $S$ 个词：
+
+\[
+\text{总 KV Cache 显存} = B \times S \times 2 \times L \times H \times b
+\]
+
+\subsubsection{实例计算（一个 80 层、隐藏维度 8192、采用原始 MHA 的 70B 级模型）：}
+
+\begin{noteBox}[核心导读与背景]
+注：真实的 Llama-2-70B 已经使用了 GQA（64 个 Q 头、8 个 KV 头），下面的数字是"假如它仍用原始 MHA"的反事实计算——正是这个数字吓人，才逼出了 GQA。LLaMA-1-65B（80 层、8192 维、MHA）的量级与之相同。
+\end{noteBox}
+
+\begin{itemize}
+  \item $L = 80$, $H = 8192$, $b = 2$（FP16）
+  \item 单个 Token 的 KV Cache 显存：
+\end{itemize}
+
+\[
+2 \times 80 \times 8192 \times 2 = 2,621,440 \text{ 字节} \approx 2.5 \text{ MB / token}
+\]
+
+\begin{itemize}
+  \item 如果有 16 个用户并发（$B=16$），每个人对话长度为 4096 字（$S=4096$）：
+\end{itemize}
+
+\[
+16 \times 4096 \times 2.5 \text{ MB} \approx 163,840 \text{ MB} = \mathbf{160 \text{ GB 显存}}!
+\]
+
+看到了吗？光是保存这一批对话的 KV Cache，就需要整整 \textbf{160 GB} 显存，这比 70B 模型本身的权重（140 GB）还要大！
+而换成 GQA-8（Llama-2/3-70B 的真实配置）后，每 token 只需 $2 \times 80 \times (8 \times 128) \times 2 = 327{,}680$ 字节 $\approx 320$ KB，同样场景只要 \textbf{20 GB}——这就是 GQA 的价值。
+
+\subsection{现代模型的架构救赎：GQA 与 PagedAttention}
+
+为了解决这个显存无底洞，学术界与工业界爆发了两场革命：
+\begin{enumerate}
+  \item \textbf{模型结构革命：GQA（分组查询注意力）}
+\end{enumerate}
+
+\begin{itemize}
+  \item 既然存储全部 64 个头太费显存，那就让 8 个 Query 头共享 1 组 Key/Value 头（KV 头数压缩为 1/8）。
+  \item 现代 Llama-3、Qwen2.5 广泛采用 GQA，将 KV Cache 显存直接缩减为原来的 \textbf{1/4 到 1/8}！
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{显存管理革命：PagedAttention（vLLM 破圈之作）}
+\end{enumerate}
+
+\begin{itemize}
+  \item 传统框架必须为每个请求提前申请连续的显存块（例如预留 4096 个词的空间），但大部分请求只聊了 100 句就退出了。vLLM 论文测到 60\%\textasciitilde{}80\% 的 KV 显存被浪费——其中既有按 max\_len 预留的闲置，也有内部碎片与外部碎片（见本节的下一段），三者要分开看。
+  \item vLLM 借鉴了操作系统的虚拟分页技术，将 KV Cache 切成 16 个 token 一块的物理页，按需分配，零碎片浪费，让服务器并发能力暴增数倍！
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[目标] 总结与下一章预告}
+
+在本篇中，我们彻底理清了大模型推理的微观全貌：
+\begin{enumerate}
+  \item \textbf{推理与训练的区别}：推理是权重冻结的自回归单向接龙；
+  \item \textbf{Prefill vs Decode}：Prefill 是首字并行算力受限（Compute-Bound），Decode 是逐字生成访存受限（Memory-Bound）；
+  \item \textbf{KV Cache 代数展开}：证明了历史 Key 和 Value 的不变性，通过缓存把\textbf{逐 token 重复做投影/FFN} 的部分从 $O(T^2)$ 降到 $O(T)$（注意力本身仍是 $O(T^2d)$，长上下文下它反过来成为主导，见本节 §3 的补充）；
+  \item \textbf{显存挑战}：KV Cache 随并发与长度线性膨胀，催生了 GQA 与 PagedAttention。
+\end{enumerate}
+
+在下一篇中，我们将探讨：
+\textbf{模型输出 Logits 之后，最终的文字是怎么被选择出来的？温度系数（Temperature）在数学极限下到底证明了什么？Top-K 和 Top-P 是怎么把胡言乱语切除的？}
+
+\begin{mathBox}[核心数学定理推导]
+{}[重点] 本篇说"Decode 访存受限"，但没有给出定量推导。为什么 batch 开大几乎不增加每一步的耗时？GQA 除了省显存还能提速吗？这些在 \textbf{第 8 篇：硬件视角} 中推导，并在你的显卡上实测。
+显存管理（PagedAttention）的完整机制与实现见 \textbf{第 12 篇} 与 Lab 12b。
+\end{mathBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\textbf{上一篇}：\textbf{第 5 篇：从原版 Transformer 到 Llama / DeepSeek：每一处改动的历史动机} ｜ \textbf{下一篇}：\textbf{第 7 篇：大模型的决策大脑：Logits、温度系数极限证明与采样算法} ｜ \textbf{总路线}：\textbf{LEARNING\_PATH.md}

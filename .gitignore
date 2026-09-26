@@ -43,3 +43,13 @@ Thumbs.db
 # Model checkpoints produced by labs (regenerate with the training scripts)
 *.pt
 *.safetensors
+
+# LaTeX intermediate build files
+*.aux
+*.log
+*.toc
+*.out
+*.listing
+*.synctex.gz
+*.fls
+*.fdb_latexmk

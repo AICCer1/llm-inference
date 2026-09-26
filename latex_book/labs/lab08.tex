@@ -1,0 +1,112 @@
+\chapter{投机解码仿真实现与无偏性实证校验}
+
+\section{Lab 10：投机采样 (Speculative Decoding) 原理与算法仿真}
+
+\section{为什么需要投机采样？}
+
+在 Lab 08 中我们已经知道：
+\begin{itemize}
+  \item \textbf{自回归 Decode 阶段是访存带宽受限（Memory-Bound）的}。
+  \item 大模型每生成 1 个 token，就必须把整个模型的权重（数十 GB）完整搬运一次，因此单步延迟很难降低。
+  \item 但如果同时输入 $K$ 个 token（如 Prefill 阶段），GPU 的算力利用率大幅提高，耗时\textbf{几乎与输入 1 个 token 相同}！
+\end{itemize}
+
+\textbf{投机采样（Speculative Decoding）的洞察}：
+\begin{noteBox}[核心导读与背景]
+"与其每次花很长时间让昂贵的大模型只猜 1 个词，不如让一个廉价的小模型快速一口气猜 $K$ 个词，再让大模型做一次并行前向传播进行批量验证！"
+\end{noteBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{核心算法流程}
+
+假设目标大模型为 $M_{\text{target}}$，轻量草稿模型为 $M_{\text{draft}}$（参数量通常仅为大模型的 $1/10 \sim 1/5$）：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  actor/.style={draw=primary, fill=primary!10, rounded corners=2mm, font=\bfseries\small\sffamily, align=center, inner sep=6pt, minimum width=4cm},
+  msg/.style={-{Stealth[scale=0.9]}, draw=secondary, line width=1.1pt, font=\small\sffamily},
+  note/.style={draw=gray!50, fill=gray!5, rounded corners=1.5mm, font=\footnotesize\sffamily, align=center, inner sep=5pt}
+]
+\node[actor] (draft) {草稿小模型 ($M_{\mathrm{draft}}$)\\小而快 (Draft Model)};
+\node[actor, right=5cm of draft] (target) {目标大模型 ($M_{\mathrm{target}}$)\\大而准 (Target Model)};
+
+\coordinate[below=6.2cm of draft] (draft_end);
+\coordinate[below=6.2cm of target] (target_end);
+
+\draw[line width=1pt, gray!60, dashed] (draft) -- (draft_end);
+\draw[line width=1pt, gray!60, dashed] (target) -- (target_end);
+
+\node[note, below=0.8cm of draft] (n1) {自回归快速生成 $K$ 个候选 Token\\$[x_1, x_2, x_3, x_4]$};
+\draw[msg] ($(draft.south)+(0,-1.8)$) -- node[above, font=\small\sffamily\color{secondary}] {1. 提交草稿预测序列 $[x_1, \dots, x_K]$} ($(target.south)+(0,-1.8)$);
+\node[note, below=2.2cm of target] (n2) {单次并行前向传播 (Parallel Forward)\\同时计算全部 $K$ 个位置真实概率分布 $p(x)$};
+\node[note, below=3.6cm of target] (n3) {逐位执行投机判定：\\接受率 $r_i = \min\left(1, \frac{p(x_i)}{q(x_i)}\right)$};
+\draw[msg] ($(target.south)+(0,-5.2)$) -- node[above, font=\small\sffamily\color{secondary}] {2. 返回接收的前缀 + 补采样调整词元} ($(draft.south)+(0,-5.2)$);
+
+\end{tikzpicture}
+\caption{投机采样（Speculative Decoding）草稿与目标模型协同序列交互}
+\end{figure}
+
+\subsection{严格的数学无偏性保证 (Unbiased Sampling)}
+
+投机采样最迷人的特点是：\textbf{完全无损（Lossless）}。
+通过巧妙的拒绝采样概率公式：
+
+\[
+\alpha = \min\left(1, \frac{P_{\text{target}}(x)}{P_{\text{draft}}(x)}\right)
+\]
+
+\begin{itemize}
+  \item 若以概率 $\alpha$ 接受草稿 token $x$；
+  \item 若拒绝，则根据校正后的残差分布采样：
+\end{itemize}
+
+\[
+P_{\text{residual}}(x) = \frac{\max(0, P_{\text{target}}(x) - P_{\text{draft}}(x))}{\sum \max(0, P_{\text{target}}(x') - P_{\text{draft}}(x'))}
+\]
+
+数学上严格证明：\textbf{无论草稿模型多弱，最终生成的文本统计分布与单独用大模型生成 100\% 完全一致！}
+（草稿模型越弱，只会让接受率变低、加速比变小，而不会改变输出分布。）
+
+\begin{mathBox}[核心数学定理推导]
+{}[几何] \textbf{证明在哪？} 完整的逐行证明见 \textbf{第 10 篇：投机解码}；
+用蒙特卡洛实验"亲眼验证"这个定理，请运行 \textbf{\texttt{verify\_unbiasedness.py}}。
+
+{}[注意] 注意：本目录的 \texttt{toy\_speculative\_decoding.py} 里，接收/拒绝只用了 \textbf{被采样 token 的一个概率值}，所以是正确的；
+但 \texttt{p\_target / p\_draft} 必须用\textbf{同一个前缀}下的两个分布——这一点在真实实现里最容易写错。
+\end{mathBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[执行] 运行仿真实验}
+
+运行 \textbf{\texttt{toy\_speculative\_decoding.py}}：
+
+\begin{lstlisting}[language=bash]
+python3 lab10_speculative_decoding/toy_speculative_decoding.py
+\end{lstlisting}
+
+本脚本模拟了草稿模型与目标模型的联合采样过程，展示每轮投机接受长度、大模型调用次数节省比例及端到端加速比。
+
+\begin{lstlisting}[language=bash]
+python3 lab10_speculative_decoding/verify_unbiasedness.py
+\end{lstlisting}
+
+对同一个前缀重复做 20 万次"投机采样的一步"，统计输出 token 的经验分布，与目标模型分布逐项比较（总变差距离应趋近 0），并给出理论接受率 $\sum_x \min(p, q)$ 与期望加速比公式的实测验证。还会演示两种\textbf{常见错误写法}（拒绝后直接从 $p$ 或 $q$ 重采样）如何让分布产生 11\%\textasciitilde{}17\% 的总变差偏差。
+
+
+\section{实验核心源码精选与解析}
+
+本实验配套有完整可运行的工业级验证代码，重点实现细节如下：
+
+
+\subsection{源码实现：\texttt{toy\_speculative\_decoding.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{toy\_speculative\_decoding.py}}]{code/lab10_speculative_decoding_toy_speculative_decoding.py}
+
+
+\subsection{源码实现：\texttt{verify\_unbiasedness.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{verify\_unbiasedness.py}}]{code/lab10_speculative_decoding_verify_unbiasedness.py}
+

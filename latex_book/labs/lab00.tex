@@ -1,0 +1,66 @@
+\chapter{从零手写自动微分与反向传播引擎 (Micrograd)}
+
+\section{Lab 03：从零手写自动求导（Autograd）}
+
+\begin{noteBox}[核心导读与背景]
+对应理论：\textbf{第 3 篇：神经网络如何学习：导数、链式法则、反向传播与交叉熵}
+前置：读完第 3 篇第一 \textasciitilde{} 六节。
+依赖：纯 Python 标准库。
+\end{noteBox}
+
+\section{为什么要自己写一遍？}
+
+PyTorch 的 \texttt{loss.backward()} 是整个深度学习最大的"黑盒"。只要你亲手写过一次，就会明白：
+\begin{itemize}
+  \item 反向传播 = \textbf{链式法则 + 拓扑排序 + 梯度累加}，没有任何魔法；
+  \item 为什么每一步训练前必须 \texttt{zero\_grad()}（梯度是 \texttt{+=} 累加的）；
+  \item 为什么训练要保存激活值（\texttt{\_backward} 闭包里用到了前向时的 \texttt{self.data}）；
+  \item 为什么推理时可以用 \texttt{torch.no\_grad()} / \texttt{torch.inference\_mode()} 省掉大量显存（不建图、不存激活）。
+\end{itemize}
+
+\section{运行}
+
+\begin{lstlisting}[language=bash]
+python3 lab03_autograd_from_scratch/micrograd_from_scratch.py
+\end{lstlisting}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{p{3cm} p{4.5cm} X}
+\toprule
+\textbf{实验} & \textbf{验证的结论} & \textbf{对应章节} \\
+\midrule
+1 & 手算表格 dL/dw = −12, dL/db = −6 & 第 3 篇 §2.3 \\
+2 & 自动求导 = 数值差分（梯度检验） & 第 3 篇 §3 \\
+3 & Softmax 雅可比 $p_i(\delta_{ij}-p_j)$；交叉熵梯度 $p - y$；logits 放大后梯度坍缩 & 第 3 篇 §6、第 4 篇 §3 \\
+4 & $\partial L/\partial W = X^T G$，$\partial L/\partial X = G W^T$ & 第 3 篇 §4 \\
+5 & Sigmoid 连乘梯度消失 vs 残差畅通 & 第 3 篇 §7、第 4 篇 §5 \\
+6 & 单层学不会 XOR，两层可以 & 第 1 篇 §4.2、第 0 篇族谱 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{动手练习（做完才算过关）}
+
+\begin{enumerate}
+  \item 给 \texttt{Value} 加一个 \texttt{silu()} 算子（$x\sigma(x)$），自己推导导数，并用实验 2 的方法做梯度检验。
+  \item 把实验 6 的激活函数从 \texttt{tanh} 换成 \texttt{sigmoid}，学习率不变，观察收敛速度变化，并用第 3 篇 §7 的导数上界解释。
+  \item 把实验 5 的深度改成 30，看纯 Sigmoid 的梯度变成多少。
+  \item （进阶）跟着 \href{https://karpathy.ai/zero-to-hero.html}{Karpathy 的 micrograd 视频} 实现 \texttt{Neuron / Layer / MLP} 类，并训练一个二分类的"月牙"数据集。
+\end{enumerate}
+
+\section{学完之后}
+
+你已经可以放心使用 \texttt{torch.autograd} 了——它做的事和这 350 行完全一样，只是算子换成了张量、实现换成了 C++/CUDA。
+下一步：\textbf{第 5 篇} $\rightarrow$ \textbf{Lab 05：亲手训练一个迷你 GPT}。
+
+
+\section{实验核心源码精选与解析}
+
+本实验配套有完整可运行的工业级验证代码，重点实现细节如下：
+
+
+\subsection{源码实现：\texttt{micrograd\_from\_scratch.py}}
+
+\lstinputlisting[language=Python, caption={\texttt{micrograd\_from\_scratch.py}}]{code/lab03_autograd_from_scratch_micrograd_from_scratch.py}
+

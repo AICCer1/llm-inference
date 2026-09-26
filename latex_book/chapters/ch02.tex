@@ -1,0 +1,335 @@
+\chapter{零基础必备数学直觉：向量、空间变换、点积与 Softmax 深度推导}
+
+\begin{tipBox}[核心直觉与思考]
+\textbf{阅读前须知}：许多同学被 AI 算法劝退，往往不是因为逻辑理解不了，而是被一堆看似高深莫测的数学符号吓退。本篇将把大模型涉及的所有核心数学工具（向量、矩阵乘法、点积、Softmax）用最通俗的几何直觉和一步步代数推导彻底讲透。
+\end{tipBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[重点] 一、从标量到张量：数据的物理载体}
+
+在代码和论文中，你经常会看到这四个名词：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[scale=0.92, >=stealth,
+  tensor/.style={rectangle, rounded corners=3pt, align=center, minimum width=2.3cm, minimum height=1.1cm, text centered, font=\sffamily\footnotesize, draw=primary, fill=primary!6}
+]
+  \node[tensor] (T0) at (0,0) {\textbf{标量 (Scalar)}\\[0.2em]\scriptsize 0 维 $\cdot$ 单个数值};
+  \node[tensor] (T1) at (3.2,0) {\textbf{向量 (Vector)}\\[0.2em]\scriptsize 1 维 $\cdot$ 一组有序数值};
+  \node[tensor] (T2) at (6.4,0) {\textbf{矩阵 (Matrix)}\\[0.2em]\scriptsize 2 维 $\cdot$ 二维平面网格};
+  \node[tensor, fill=tipgreen!10, draw=tipgreen] (T3) at (9.8,0) {\textbf{张量 (Tensor)}\\[0.2em]\scriptsize 3 维及以上 $\cdot$ 多维数据体};
+  
+  \draw[->, very thick, primary] (T0) -- (T1);
+  \draw[->, very thick, primary] (T1) -- (T2);
+  \draw[->, very thick, primary] (T2) -- (T3);
+\end{tikzpicture}
+\caption{数据物理维度的层级跃迁（标量 $\to$ 向量 $\to$ 矩阵 $\to$ 张量）}
+\end{figure}
+
+\begin{enumerate}
+  \item \textbf{标量（Scalar）}：单个数值。
+\end{enumerate}
+
+\begin{itemize}
+  \item 例如：今天的气温 $25.5$℃。
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{向量（Vector）}：一列按顺序排列的数字，通常表示高维空间里的一个\textbf{坐标点}或一个\textbf{带方向的箭头}。
+\end{enumerate}
+
+\begin{itemize}
+  \item 例如：描述一个人：$[180\text{cm}, 75\text{kg}, 25\text{岁}]$，这是一个 3 维向量。
+  \item 在大模型中，一个词（如“大”）会被表示为一个包含 4096 个数字的向量，这 4096 个数字就是该词在人类语义空间中的精细坐标。
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{矩阵（Matrix）}：由行和列构成的二维表格。
+\end{enumerate}
+
+\begin{itemize}
+  \item 形状写作 $[M, N]$，表示有 $M$ 行、$N$ 列。
+  \item 矩阵在大模型里通常有两种角色：
+  \item \textbf{批量数据}：比如一句话包含 10 个词，每个词是 4096 维，整句话就是 $[10, 4096]$ 的矩阵；
+  \item \textbf{空间变换器（权重参数）}：用来把向量从一个空间变换到另一个空间。
+\end{itemize}
+
+\begin{enumerate}
+  \item \textbf{张量（Tensor）}：超过二维的多维数组。
+\end{enumerate}
+
+\begin{itemize}
+  \item 例如在推理系统中，常见形状 \texttt{[Batch, Seq\_Len, Hidden\_Dim]}：
+  \item \texttt{Batch = 4}（同时处理 4 个用户的提问）
+  \item \texttt{Seq\_Len = 512}（每句话有 512 个词）
+  \item \texttt{Hidden\_Dim = 4096}（每个词的维度）
+  \item 这是一个三维张量，形状为 $[4, 512, 4096]$。
+\end{itemize}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[几何] 二、点积（Dot Product）：大模型如何计算两个词的关联度？}
+
+在自注意力机制中，最重要的核心计算就是\textbf{点积}。为什么计算两个向量的点积，就能代表两个词的语义相关性？
+
+\subsection{代数定义（怎么算）}
+
+假设有两个 $n$ 维向量 $\vec{a} = [a_1, a_2, \dots, a_n]$ 和 $\vec{b} = [b_1, b_2, \dots, b_n]$，它们的点积等于\textbf{对应位置元素相乘再全部相加}：
+
+\[
+\vec{a} \cdot \vec{b} = a_1 b_1 + a_2 b_2 + \dots + a_n b_n = \sum_{i=1}^n a_i b_i
+\]
+
+\begin{noteBox}[核心导读与背景]
+\textbf{例题}：$\vec{a} = [1, 2]$, $\vec{b} = [3, 4]$
+点积 $\vec{a} \cdot \vec{b} = 1 \times 3 + 2 \times 4 = 3 + 8 = 11$。
+\end{noteBox}
+
+\subsection{几何意义与余弦定理（为什么代表相似度？）}
+
+在欧氏空间几何学中，点积还有一个极其重要的等价公式：
+
+\[
+\vec{a} \cdot \vec{b} = |\vec{a}| |\vec{b}| \cos(\theta)
+\]
+
+其中：
+\begin{itemize}
+  \item $|\vec{a}|$ 是向量 $\vec{a}$ 的长度（模长）；
+  \item $|\vec{b}|$ 是向量 $\vec{b}$ 的长度；
+  \item $\theta$ 是两个向量之间的夹角（从 $0^\circ$ 到 $180^\circ$）；
+  \item $\cos(\theta)$ 是夹角的余弦值。
+\end{itemize}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[scale=1.2, >=stealth]
+  \coordinate (O) at (0,0);
+  \coordinate (A) at (3.5,0);
+  \coordinate (B) at (2.8,2.2);
+  
+  \draw[->, very thick, primary] (O) -- (A) node[right, font=\small\sffamily\bfseries] {向量 $\vec{a}$};
+  \draw[->, very thick, secondary] (O) -- (B) node[above right, font=\small\sffamily\bfseries] {向量 $\vec{b}$};
+  
+  \draw[thick, warnred, ->] (0.8,0) arc (0:38:0.8) node[midway, right, font=\small\sffamily] {$\theta$};
+  
+  \node[font=\footnotesize\sffamily, align=left, color=darktext] at (4.2, 1.2) {
+    $\vec{a} \cdot \vec{b} = |\vec{a}| |\vec{b}| \cos\theta$\\
+    $\theta \to 0^\circ \implies \cos\theta \to 1$ (最相似)\\
+    $\theta = 90^\circ \implies \cos\theta = 0$ (正交无关)
+  };
+\end{tikzpicture}
+\caption{高维向量内积与夹角余弦相似度直观几何解释}
+\end{figure}
+
+让我们来看看 $\cos(\theta)$ 随夹角的变化规律：
+\begin{enumerate}
+  \item \textbf{方向完全相同（$\theta = 0^\circ$）}：
+\end{enumerate}
+
+   $\cos(0^\circ) = 1$，点积取得最大正值！\textbf{（表示两个词的含义高度一致、强烈共鸣）}
+\begin{enumerate}
+  \item \textbf{方向垂直/正交（$\theta = 90^\circ$）}：
+\end{enumerate}
+
+   $\cos(90^\circ) = 0$，点积精确等于 0！\textbf{（表示两个词风马牛不相及，毫不相关）}
+\begin{enumerate}
+  \item \textbf{方向完全相反（$\theta = 180^\circ$）}：
+\end{enumerate}
+
+   $\cos(180^\circ) = -1$，点积为负数！\textbf{（表示语义冲突或对立）}
+
+\begin{tipBox}[核心直觉与思考]
+{}[思考] \textbf{核心结论}：
+在大模型中，Query（查询）向量与 Key（键）向量做点积：
+\end{tipBox}
+
+\[
+\text{Score} = Q \cdot K^T
+\]
+
+\begin{warningBox}[避坑指南与核心警示]
+由 $\vec{q} \cdot \vec{k} = |\vec{q}| |\vec{k}| \cos\theta$，它同时由\textbf{方向（夹角）}和\textbf{长度（模长）}决定：模长相近时，夹角越小点积越大、分配的注意力越高；但模长不同时，一个夹角更大却更"长"的 Key 也可能拿到更高的分数。
+所以点积是"\textbf{未归一化的}相似度"，并不等于余弦相似度。这一点很重要：第 4 篇会证明，正是因为模长会随维度 $d_k$ 增长，点积的方差才会变大，所以必须除以 $\sqrt{d_k}$。
+\end{warningBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{三、矩阵乘法：空间的旋转、拉伸与投影}
+
+很多人高中或大学学过矩阵乘法，只记得“左边行乘以右边列”，却不知道它在物理世界中意味着什么。
+
+\subsection{物理直觉：矩阵是一个“空间投影仪”}
+
+当一个向量 $\vec{x}$（比如代表一个词的 4096 维特征）乘以一个权重矩阵 $W$ 时：
+
+\[
+\vec{y} = \vec{x} W
+\]
+
+\textbf{这绝不仅是一堆数字的加减乘除，而是在把向量 $\vec{x}$ 投射到一个全新的语义子空间中！}
+
+在 Transformer 中：
+\begin{itemize}
+  \item 相同的输入词向量 $X$，乘以矩阵 $W_q$ 就被投射到了\textbf{“提问空间（Query Space）”}；
+  \item 乘以矩阵 $W_k$ 就被投射到了\textbf{“特征被检索空间（Key Space）”}；
+  \item 乘以矩阵 $W_v$ 就被投射到了\textbf{“实际语义内容空间（Value Space）”}。
+\end{itemize}
+
+这三个矩阵参数，是大模型在预训练过程中学习到的最重要的核心知识载体。
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[推导] 四、Softmax 函数：从任意实数打分到合法的概率分布}
+
+当注意力机制计算完点积后，得到了一组得分（称为 Logits 或 Attention Scores），例如：
+
+\[
+z = [2.5, -1.0, 5.0]
+\]
+
+这些数字有正有负，求和不等于 1，计算机无法把它们当作概率或者注意力加权权重使用。
+
+我们需要一个函数，将任意实数数组 $z$ 转换为合法的概率分布 $p$：
+\begin{itemize}
+  \item 条件 1：所有元素必须严格大于 0（$p_i > 0$）；
+  \item 条件 2：所有元素的和必须严格等于 1（$\sum_{i} p_i = 1$）。
+\end{itemize}
+
+\subsection{为什么不用最简单的“除以总和”？}
+
+你可能会想，为什么不直接取绝对值再除以总和呢？例如：
+
+\[
+p_i = \frac{|z_i|}{\sum |z_j|}
+\]
+
+\textbf{为什么不行？}
+\begin{enumerate}
+  \item \textbf{失去符号判别}：$-5.0$ 和 $+5.0$ 会得到相同的权重，但负数代表不相关甚至反对，绝对不能和正数等同。
+  \item \textbf{缺乏数学可导性}：绝对值函数在 $x=0$ 处不可导，神经网络无法进行梯度反向传播。
+  \item \textbf{无法拉开差距}：简单的线性归一化不能突出高分项的绝对优势。
+\end{enumerate}
+
+\subsection{指数函数 $\exp(x) = e^x$ 的登场与推导}
+
+数学家引入了自然常数的指数函数 $e^x$（$e \approx 2.71828$），它拥有极其完美的数学特质：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[scale=1.0, >=stealth]
+  \draw[->, thick, darktext] (-3.5,0) -- (2.5,0) node[right, font=\small\sffamily] {$x$};
+  \draw[->, thick, darktext] (0,-0.3) -- (0,3.8) node[above, font=\small\sffamily] {$y = \exp(x)$};
+  
+  \draw[domain=-3.2:1.3, smooth, variable=\x, very thick, primary] plot ({\x}, {exp(\x)});
+  
+  \fill[warnred] (0,1) circle (2pt) node[above left, font=\footnotesize\sffamily] {$(0, 1)$};
+  \draw[dashed, codegray] (-3.2, 0) -- (2.2, 0);
+  
+  \node[font=\footnotesize\sffamily, align=left, draw=boxborder, fill=lightbg, rounded corners=2pt, inner sep=4pt] at (-1.5, 2.2) {
+    $e^x > 0$ 恒成立 (严格正定)\\
+    单调严格递增\\
+    导数 $\frac{d}{dx}e^x = e^x$
+  };
+\end{tikzpicture}
+\caption{$\exp(x) = e^x$ 的严格正定性与单调性}
+\end{figure}
+
+利用这一性质，对每一项先取指数确保严格为正，再除以所有指数项的总和完成归一化，这就诞生了著名的 \textbf{Softmax 公式}：
+
+\[
+p_i = \text{Softmax}(z)_i = \frac{e^{z_i}}{\sum_{j=1}^n e^{z_j}}
+\]
+
+\subsubsection{实例计算：}
+
+设 $z = [1.0, 2.0, 3.0]$：
+\begin{enumerate}
+  \item 分别取指数：
+\end{enumerate}
+
+\begin{itemize}
+  \item $e^{1.0} \approx 2.718$
+  \item $e^{2.0} \approx 7.389$
+  \item $e^{3.0} \approx 20.086$
+\end{itemize}
+
+\begin{enumerate}
+  \item 求和：$\sum = 2.718 + 7.389 + 20.086 = 30.193$
+  \item 归一化概率：
+\end{enumerate}
+
+\begin{itemize}
+  \item $p_1 = 2.718 / 30.193 \approx 9.0\%$
+  \item $p_2 = 7.389 / 30.193 \approx 24.5\%$
+  \item $p_3 = 20.086 / 30.193 \approx 66.5\%$
+  \item 总和：$9.0\% + 24.5\% + 66.5\% = 100\%$！
+\end{itemize}
+
+\begin{tipBox}[核心直觉与思考]
+{}[思考] \textbf{Softmax 的直观名字含义}：
+传统的 $\max(1, 2, 3)$ 是“硬最大值（Hard-max）”，只会输出 3（概率为 $[0, 0, 1]$）。
+而 \textbf{Softmax} 是“平滑软化版的最大值”，最大项拿到绝大部分概率（66.5\%），但同时也给次高项保留了一定机会，且整体函数处处光滑可导！
+\end{tipBox}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[防护] 五、工程避坑细节：Softmax 的平移不变性与防止数值溢出}
+
+在工业级大模型推理引擎中，如果直接按照数学公式 \texttt{math.exp(z)} 编写代码，你的服务会在运行几秒钟后彻底崩溃（报错 \texttt{OverflowError: math range error} 或输出 \texttt{NaN}）。
+
+\subsection{为什么会溢出？}
+
+浮点数（如 float32）能表示的最大数字约为 $3.4 \times 10^{38}$。
+当大模型某一步算出的未缩放点积较大时（例如 $z_i = 100$），计算 $e^{100} \approx 2.68 \times 10^{43}$，直接突破硬件浮点数表示上限，导致\textbf{指数爆炸溢出（Overflow）}！
+
+\subsection{数学拯救：平移不变性证明}
+
+科学家们发现了一个美妙的代数恒等式：\textbf{给输入向量的所有元素同时减去一个常数 $C$，Softmax 的计算结果完全不发生任何改变！}
+
+\textbf{【数学严格证明】}：
+设新的输入为 $z_i' = z_i - C$，代入 Softmax 公式：
+
+\[
+\text{Softmax}(z - C)_i = \frac{e^{z_i - C}}{\sum_{j=1}^n e^{z_j - C}}
+= \frac{e^{z_i} \cdot e^{-C}}{\sum_{j=1}^n (e^{z_j} \cdot e^{-C})}
+\]
+
+提取公因式 $e^{-C}$：
+
+\[
+= \frac{e^{z_i} \cdot e^{-C}}{e^{-C} \cdot \sum_{j=1}^n e^{z_j}}
+= \frac{e^{z_i}}{\sum_{j=1}^n e^{z_j}} = \text{Softmax}(z)_i \quad \blacksquare
+\]
+
+\subsection{工业级标准实现（Safe Softmax）：}
+
+令常数 $C = \max(z)$（整个向量中的最大值）。
+此时每一个被计算的数值 $z_i - C \le 0$，其指数 $e^{z_i - C} \in (0, 1]$，最大项为 $e^0 = 1$。
+\textbf{无论输入的数字多么大，指数永远被锁死在 0 到 1 之间，彻底根除浮点数溢出 Bug！}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\section{[目标] 总结与下一章预告}
+
+在本篇中，我们建立了大模型所需的全部底层数学直觉：
+\begin{enumerate}
+  \item \textbf{向量}：语义空间的几何坐标点；
+  \item \textbf{点积}：由\textbf{夹角与模长共同}决定的未归一化相似度（$\vec a\cdot\vec b = |\vec a||\vec b|\cos\theta$，\textbf{不等于}余弦相似度）；
+  \item \textbf{矩阵乘法}：将特征投射到不同的语义子空间；
+  \item \textbf{Softmax}：利用指数函数的单调性与正值性，将打分安全映射为加权概率。
+\end{enumerate}
+
+掌握了这些基石，下一篇（第 3 篇）我们先回答"神经网络到底怎么学习"：导数、反向传播、交叉熵，以及 \textbf{Softmax 的导数为什么那么优雅}。
+再下一篇（第 4 篇）直面 Transformer 最核心的王牌公式——它"为什么必须除以 $\sqrt{d_k}$"的论证，正要用到第 3 篇推导的 Softmax 导数：
+
+\[
+\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right) V
+\]
+
+我们将推导：\textbf{为什么必须除以 $\sqrt{d_k}$？如果没有这根小小的平方根号，大模型为什么会彻底崩溃？}
+
+\vspace{0.8em}\hrule\vspace{0.8em}
+
+\textbf{上一篇}：\textbf{第 1 篇：计算机如何读懂语言？从人工规则到大模型演进史} ｜ \textbf{下一篇}：\textbf{第 3 篇：神经网络如何学习：导数、链式法则、反向传播与交叉熵} ｜ \textbf{总路线}：\textbf{LEARNING\_PATH.md}
