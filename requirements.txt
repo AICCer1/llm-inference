@@ -3,6 +3,8 @@
 # 只需要 Python 标准库：lab03、lab04、lab06、lab07a、lab08 的 memory_calculator.py、lab10、lab11 的 quant_basics.py、lab12a
 # 需要 NumPy：lab09、lab11 的 advanced_quant_numpy.py、lab12b、lab13
 # 需要 PyTorch：lab05、lab07b、lab08 的 measure_gpu_roofline.py（以及 lab09 的可选 GPU 实验）
+# 需要 PyTorch + GPU：lab09 的 CUDA 附录（cuda_softmax/）—— 它用的是 PyTorch 自带的
+#   NVRTC 与 cuda-python 驱动绑定，**不需要另外安装 CUDA toolkit 或 nvcc**
 #
 # 推荐在仓库根目录建一个虚拟环境（已被 .gitignore 忽略）：
 #   python3 -m venv .venv && source .venv/bin/activate

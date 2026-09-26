@@ -5,6 +5,7 @@
 > **前置**：第 2 篇（Softmax 平移不变性）、第 4 篇（注意力公式）、第 8 篇（存储层级、算术强度、算子融合）。
 >
 > **配套实验**：[`lab09_flash_attention/flash_attention_numpy.py`](../lab09_flash_attention/flash_attention_numpy.py)——用 NumPy 实现 Online Softmax、分块 FlashAttention 与 FlashDecoding 的 split-K 合并，逐一验证与朴素注意力完全相等；并在 GPU 上实测朴素注意力与 PyTorch SDPA 的显存差距。
+> **真机版**：[`lab09_flash_attention/cuda_softmax/`](../lab09_flash_attention/cuda_softmax/)——把本节和下一节的 Online Softmax 写成**真正的 CUDA C++ kernel**，在你自己显卡上量出 DRAM 带宽、L2 命中与占用率。不需要装 CUDA toolkit。
 
 ---
 
@@ -88,6 +89,8 @@ for 每个 Q 块 Q_i（不同的 Q 块互相独立 → 分给不同的 SM 并行
 - **随 $N$ 增长的真正收益是显存**：朴素实现需要 $O(N^2)$ 的额外显存，FlashAttention 只要 $O(N)$。再加上多个 kernel 融合成一个、不再产生 FP32 的 $N^2$ 中间张量，实测加速往往比访存模型预测的还大（配套实验 5 在 5060 Ti 上 $N = 4096$ 时约 16 倍）。
 
 > 💡 **一个反直觉的教训**：FlashAttention 没有减少任何计算，只是**减少了数据搬运**，就换来了数倍加速。这正是第 8 篇 Roofline 的核心观点——在访存受限的区域，优化的对象是字节而不是 FLOPs。它的反向传播更进一步：**宁可重新计算 $S$ 和 $P$，也不去读存下来的 $N^2$ 矩阵**，因为重算比读显存更便宜。
+
+**想亲手验证这句话？** [`lab09_flash_attention/cuda_softmax/`](../lab09_flash_attention/cuda_softmax/) 把本节的 Online Softmax 写成真正的 CUDA C++ kernel，在你自己显卡上量出：三个实现**都贴着 380 GB/s 的 Roofline**（也就是都"优化到位了"），差别只在搬运了 268 MB 还是 134 MB —— 约 1.9x。里面还有一个反直觉的结果：把整行缓存进 shared memory 的版本在 $N = 8192$ 时**反而掉到 74%**，因为 shared 占用把 SM 的常驻 block 数从 6 压到 2。**这正是上面说的"分块"为什么必须存在。**
 
 ---
 

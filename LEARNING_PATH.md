@@ -159,14 +159,15 @@ Lab 07b 是整条路线**最关键的一步**：不用 `transformers` 的模型�
 
 | 主题 | 读 | 做 |
 | :--- | :--- | :--- |
-| FlashAttention | [第 9 篇](zero_to_hero_tutorial/09_FlashAttention：OnlineSoftmax的严格推导与IO复杂度.md) + [From Online Softmax to FlashAttention](https://courses.cs.washington.edu/courses/cse599m/23sp/notes/flashattn.pdf) | [Lab 09](lab09_flash_attention/) |
+| FlashAttention | [第 9 篇](zero_to_hero_tutorial/09_FlashAttention：OnlineSoftmax的严格推导与IO复杂度.md) + [From Online Softmax to FlashAttention](https://courses.cs.washington.edu/courses/cse599m/23sp/notes/flashattn.pdf) | [Lab 09](lab09_flash_attention/) + [真机 CUDA 版](lab09_flash_attention/cuda_softmax/)（把 online softmax 写成 kernel，量出带宽与占用率） |
 | 投机解码 | [第 10 篇](zero_to_hero_tutorial/10_投机解码：无偏性证明与期望加速比.md) | [Lab 10](lab10_speculative_decoding/)：先跑 `verify_unbiasedness.py`，再跑 `toy_speculative_decoding.py` |
 | 量化 | [第 11 篇](zero_to_hero_tutorial/11_量化：从每位6dB到SmoothQuant、AWQ与GPTQ.md) + [A Visual Guide to Quantization](https://newsletter.maartengrootendorst.com/p/a-visual-guide-to-quantization) | [Lab 11](lab11_quantization/)：`quant_basics.py` → `advanced_quant_numpy.py` |
 
 **出关检验**：
 - 写出投机采样单 token 无偏性的完整证明；
 - 写出 Online Softmax 的更新公式并证明它的正确性；
-- 解释为什么 GPTQ 的权重误差更大、输出误差却更小。
+- 解释为什么 GPTQ 的权重误差更大、输出误差却更小；
+- （做完[真机 CUDA 附录](lab09_flash_attention/cuda_softmax/)）解释为什么"把整行缓存进 shared memory"在 $N$ 变大后**反而更慢**，以及这和 FlashAttention 必须分块的关系。
 
 ---
 
@@ -246,7 +247,7 @@ Lab 07b 是整条路线**最关键的一步**：不用 `transformers` 的模型�
 | 第 6 篇 自回归与 KV Cache | [lab06_kv_cache](lab06_kv_cache/) |
 | 第 7 篇 Logits 与采样 | [lab07a_sampling](lab07a_sampling/)、[lab07b_qwen_from_scratch](lab07b_qwen_from_scratch/)（手写 Qwen2.5，综合第 4~8 篇） |
 | 第 8 篇 硬件视角 | [lab08_memory_and_roofline](lab08_memory_and_roofline/) |
-| 第 9 篇 FlashAttention | [lab09_flash_attention](lab09_flash_attention/) |
+| 第 9 篇 FlashAttention | [lab09_flash_attention](lab09_flash_attention/)（含[真机 CUDA 附录](lab09_flash_attention/cuda_softmax/)） |
 | 第 10 篇 投机解码 | [lab10_speculative_decoding](lab10_speculative_decoding/) |
 | 第 11 篇 量化 | [lab11_quantization](lab11_quantization/) |
 | 第 12 篇 推理服务系统 | [lab12a_continuous_batching](lab12a_continuous_batching/)、[lab12b_paged_attention](lab12b_paged_attention/) |

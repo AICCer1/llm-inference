@@ -89,7 +89,7 @@ flowchart TD
 | **第 7 篇** | [`lab07a_sampling/`](lab07a_sampling/) | Greedy、温度、Top-K、Top-P、重复惩罚的概率分布前后对比 | `sampling_strategies.py` |
 | **第 7 篇** | [`lab07b_qwen_from_scratch/`](lab07b_qwen_from_scratch/) | **【关键】**只读原始权重、手写 Qwen2.5 推理，与 HF 官方逐位对拍 logits 与生成结果 | `qwen_from_scratch.py` |
 | **第 8 篇** | [`lab08_memory_and_roofline/`](lab08_memory_and_roofline/) | 模型权重、KV Cache、激活值显存计算，计算密度（Arithmetic Intensity）与 Roofline 模型分析 | `memory_calculator.py` |
-| **第 9 篇** | [`lab09_flash_attention/`](lab09_flash_attention/) | Online Softmax、分块 FlashAttention、FlashDecoding 合并，GPU 上朴素 vs SDPA | `flash_attention_numpy.py` |
+| **第 9 篇** | [`lab09_flash_attention/`](lab09_flash_attention/) | Online Softmax、分块 FlashAttention、FlashDecoding 合并，GPU 上朴素 vs SDPA；**[真机 CUDA 附录](lab09_flash_attention/cuda_softmax/)**：同一套 online softmax 写成 CUDA C++ kernel，实测 DRAM 带宽与占用率 | `flash_attention_numpy.py`<br/>`cuda_softmax/softmax_kernels.cu` |
 | **第 10 篇** | [`lab10_speculative_decoding/`](lab10_speculative_decoding/) | 投机采样（Speculative Decoding）核心思想、草稿模型生成与主模型并行验证算法 | `toy_speculative_decoding.py` |
 | **第 11 篇** | [`lab11_quantization/`](lab11_quantization/) | 对称与非对称量化、Per-Tensor / Per-Channel / Per-Group 量化、AWQ / GPTQ 原理 | `quant_basics.py` |
 | **第 12 篇** | [`lab12a_continuous_batching/`](lab12a_continuous_batching/) | 静态 Batching 的「气泡（Padding/Bubble）」问题、迭代级调度（Continuous Batching）仿真 | `continuous_batching_sim.py` |
@@ -98,6 +98,8 @@ flowchart TD
 | **毕业设计** | [`capstone_engines_practice/`](capstone_engines_practice/) | vLLM / llama.cpp 部署与压测任务、源码阅读路线（毕业设计） | `bench_openai_server.py` |
 
 Lab 08、10、11 还各新增了进阶脚本：`measure_gpu_roofline.py`（在你的显卡上实测 Roofline）、`verify_unbiasedness.py`（蒙特卡洛验证投机采样定理）、`advanced_quant_numpy.py`（从零实现 SmoothQuant / AWQ / GPTQ）。
+
+**全仓库唯一一份真 CUDA C++** 在 [`lab09_flash_attention/cuda_softmax/`](lab09_flash_attention/cuda_softmax/)：把第 9 篇的 Online Softmax 写成 kernel（`__global__` / `__shared__` / `__syncthreads()`），量出 DRAM 带宽、L2 命中与占用率。用 PyTorch 自带的 NVRTC 编译，**不需要装 CUDA toolkit**。
 
 ---
 

@@ -31,9 +31,28 @@
 
 最后一行的朴素实现需要 20GB，超过了 16GB 显存却没有报 OOM，而是慢了 180 倍：Windows/WSL 的驱动把溢出部分放进了**系统内存**，通过 PCIe 访问。这是一个很好的提醒——"能跑"不等于"跑在显存里"。
 
+## 📎 附录：真机 CUDA 版（强烈建议做）
+
+上面的实验全部是 NumPy 仿真——它证明**数学**是对的，但访存量都是算出来的。**[`cuda_softmax/`](cuda_softmax/) 用真正的 CUDA C++ 把同一套 online softmax 写成 kernel**，在你的显卡上量出带宽：
+
+| 实现 | DRAM 搬运 | 耗时 | 占理论上界 | 相对 |
+| :--- | :--- | ---: | ---: | ---: |
+| 三段式（= 本实验 §1 的朴素版） | 4 次 | 0.694 ms | 51% | 1.00x |
+| 单 kernel + online softmax | 2 次 | 0.359 ms | **97~98%** | **1.9x** |
+| 同上 + 行缓存进 shared | 2 次 | 0.360 ms | **97~98%** | **1.9x** |
+
+三个实现**都贴着 380 GB/s 的 Roofline**，差别只在搬了多少字节。里面还有一个反直觉结果：**行缓存进 shared 的版本在 N=8192 时反而崩到 74%**——因为 34 KB shared/block 把每个 SM 的常驻 block 数从 6 压到 2。**这正是 FlashAttention 要做分块而不是缓存整行的原因。**
+
+```bash
+.venv/bin/python lab09_flash_attention/cuda_softmax/run.py
+```
+
+不需要装 CUDA toolkit（用的是 PyTorch 自带的 NVRTC）。详见 [`cuda_softmax/README.md`](cuda_softmax/README.md)。
+
 ## 动手练习
 
 1. 在 `flash_attention` 里加上对 GQA 的支持：多个 Q 头共享同一组 K/V 块时，同一个 K/V 块读一次就能服务多个头（对照第 8 篇 §4.3）。
 2. 实现 FlashAttention-1 的循环顺序（外层 K/V、内层 Q），需要把每个 Q 块的 $m, \ell$, acc 写回"显存"再读出来；统计访存量，理解 FlashAttention-2 为什么交换循环。
 3. 把实验 4 的 `partial_attention` 改成读取**不连续**的 KV 块（给一个 block table，见 Lab 12b），这就是 PagedAttention kernel 的核心逻辑。
-4. （进阶）跟着 [Triton Fused Attention 教程](https://triton-lang.org/main/getting-started/tutorials/06-fused-attention.html) 写一个真正在 GPU 上运行的 FlashAttention 前向，与 SDPA 对比速度。
+4. （进阶）在 [`cuda_softmax/`](cuda_softmax/) 里把行缓存版改成**真正的分块**（只缓存 `BLOCK` 个元素、循环推进），验证占用率恢复后带宽回到 97~98%——做完这题你就理解了 tiling 是怎么来的。
+5. （进阶）跟着 [Triton Fused Attention 教程](https://triton-lang.org/main/getting-started/tutorials/06-fused-attention.html) 写一个真正在 GPU 上运行的 FlashAttention 前向，与 SDPA 对比速度。
