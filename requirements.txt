@@ -1,6 +1,23 @@
 # LLM Inference Learning Requirements
-# 基础运行库（纯 Python 标准库即可运行部分仿真脚本，推荐安装 PyTorch 以进行张量运算测试）
+#
+# 只需要 Python 标准库：lab03、lab04、lab06、lab07a、lab08 的 memory_calculator.py、lab10、lab11 的 quant_basics.py、lab12a
+# 需要 NumPy：lab09、lab11 的 advanced_quant_numpy.py、lab12b、lab13
+# 需要 PyTorch：lab05、lab07b、lab08 的 measure_gpu_roofline.py（以及 lab09 的可选 GPU 实验）
+#
+# 推荐在仓库根目录建一个虚拟环境（已被 .gitignore 忽略）：
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# ⚠️ PyTorch 必须单独安装，且 RTX 50 系列（Blackwell, sm_120，例如 RTX 5060 Ti）
+#    必须使用 CUDA 12.8 及以上的轮子，cu124 / cu121 的轮子会报 "no kernel image is available"：
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+#    其它显卡请到 https://pytorch.org/get-started/locally/ 选择对应命令。
+
 numpy>=1.24.0
 matplotlib>=3.7.0
-# torch (可选，推荐通过官方命令安装对应 CUDA 版本的 torch):
-# pip install torch --index-url https://download.pytorch.org/whl/cu124
+
+# lab07b_qwen_from_scratch：下载真实权重，并用 HF transformers 作为"标准答案"对拍
+transformers>=4.45.0
+safetensors>=0.4.0
+huggingface_hub>=0.24.0
+tokenizers>=0.20.0

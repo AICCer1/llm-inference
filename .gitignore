@@ -39,3 +39,7 @@ ENV/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Model checkpoints produced by labs (regenerate with the training scripts)
+*.pt
+*.safetensors
