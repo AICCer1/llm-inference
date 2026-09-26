@@ -158,6 +158,7 @@ def exp5_latency_model():
     msg = 1 * d * 2                                            # 每次 All-Reduce：1 个 token × d × 2 字节
     print(f"   每 token: 读权重 {params * 2 / 1e9:.0f} GB；每步 {2 * L} 次 All-Reduce，每次仅 {msg / 1024:.0f} KB（很小 → 由固定延迟主导）")
     print(f"   {'互联':<24} | {'TP':>3} | {'读权重 ms':>9} | {'通信 ms':>8} | {'每 token ms':>11} | {'相对 TP=1':>9}")
+    speedups = {}
     for name, (bw, lat) in links.items():
         base = None
         for n in [1, 2, 4, 8]:
@@ -165,14 +166,30 @@ def exp5_latency_model():
             t_comm = 0 if n == 1 else 2 * L * (lat + 2 * (n - 1) / n * msg / bw)
             t = t_mem + t_comm
             base = base or t
+            speedups[(name, n)] = base / t
             print(f"   {name:<22} | {n:>3} | {t_mem * 1e3:9.2f} | {t_comm * 1e3:8.2f} | {t * 1e3:11.2f} | {base / t:8.2f}x")
+    # 加速比必须是次线性的：通信吃掉一部分收益，而且卡越多占比越高
+    for name in links:
+        sp = [speedups[(name, n)] for n in (1, 2, 4, 8)]
+        assert sp[0] == 1.0, f"{name}: TP=1 的加速比应为 1，实际 {sp[0]}"
+        assert all(sp[i] < sp[i + 1] for i in range(3)), f"{name}: 加速比应随 n 单调递增，实际 {sp}"
+        assert sp[3] < 8.0, f"{name}: TP=8 的加速比 {sp[3]:.2f} 不该达到理想的 8 倍（通信不可能免费）"
+    # NVLink 的通信带宽远高于 PCIe，所以它的扩展效率必须更好
+    nv = next(v for (name, n), v in speedups.items() if name.startswith("NVLink") and n == 8)
+    pc = next(v for (name, n), v in speedups.items() if name.startswith("PCIe") and n == 8)
+    assert nv > pc * 1.2, f"NVLink 上 TP=8 的加速比 {nv:.2f} 应显著优于 PCIe 的 {pc:.2f}"
     print("   （TP=1 需要 141 GB 显存，单张 80GB 卡其实放不下，这里只作为计算基准）")
     print("   👉 NVLink 上 TP=8 仍有约 7 倍加速；PCIe 上通信的固定延迟每 token 要累加 160 次，TP=8 时占总耗时近 40%，")
     print("      扩展效率明显下降。而且通信时间几乎不随 n 减少，卡越多占比越高 —— 所以 TP 通常只在 NVLink 连接的机内使用。")
 
     print("\n   流水线并行 PP=4（每卡 20 层）：")
     t_pp = params * 2 / hbm_bw + 3 * 20e-6                    # 各段依次执行，总读取量不变，外加 3 次段间传输
-    print(f"   单请求每 token ≈ {t_pp * 1e3:.2f} ms —— 与单卡相同，PP 不降低延迟；但 4 段可以同时处理 4 批不同的请求，吞吐 ×4。")
+    t_single = params * 2 / hbm_bw
+    # PP 的要点：延迟几乎不变（只多了几次段间传输），换的是吞吐
+    assert t_pp > t_single and t_pp < t_single * 1.5, \
+        f"PP 的延迟应接近单卡（{t_single * 1e3:.2f} ms），实际 {t_pp * 1e3:.2f} ms"
+    print(f"   单请求每 token ≈ {t_pp * 1e3:.2f} ms —— 与单卡的 {t_single * 1e3:.2f} ms 基本相同，"
+          f"PP 不降低延迟；但 4 段可以同时处理 4 批不同的请求，吞吐 ×4。")
 
 
 if __name__ == "__main__":

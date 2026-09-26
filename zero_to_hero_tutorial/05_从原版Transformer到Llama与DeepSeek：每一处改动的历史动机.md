@@ -36,7 +36,7 @@ $$ e_{tj} = a(s_{t-1}, h_j), \qquad \alpha_{tj} = \frac{\exp(e_{tj})}{\sum_k \ex
 | 编码器各位置 $h_j$（被加权求和的内容） | Value |
 | 打分函数 $a(\cdot)$ 是一个小 MLP（加性注意力） | 打分函数是点积 $q \cdot k / \sqrt{d_k}$ |
 
-2015 年 Luong 等人把打分函数换成**点积**（乘性注意力）——更便宜，而且整批计算恰好是一次矩阵乘，GPU 最擅长。**Q/K/V 这三个角色、softmax 加权求和，在 2014 年就已经全部出现了。**
+2015 年 Luong 等人把打分函数换成**点积**（乘性注意力）——更便宜，而且整批计算恰好是一次矩阵乘，GPU 最擅长。**注意**：2014 年 Bahdanau 已经有了「打分 + softmax 加权求和」这个两段结构，但那时 Key 和 Value 是**同一个** $h_j$（没有 $W_k/W_v$ 两套投影），Query 就是解码器状态而非可学习的投影。**Q/K/V 三套独立投影的分工是 2017 年 Transformer 才定型的**——上面表格里的 Q/K/V 是后人回填的框架。
 
 ### 4. 2017：Transformer 的真正创新是"只要注意力"
 既然注意力这么有用，而 RNN 又串行、又会遗忘（第 1、3 篇），Vaswani 等人问：**能不能把 RNN 整个扔掉，只用注意力？**
@@ -69,7 +69,7 @@ $$ e_{tj} = a(s_{t-1}, h_j), \qquad \alpha_{tj} = \frac{\exp(e_{tj})}{\sum_k \ex
 | ✅ 同样的文本 token 更少 → Decode 步数更少、KV Cache 更小 | ✅ Embedding 与 LM Head 更小 |
 | ❌ Embedding 表和 LM Head 更大：LM Head 每个 token 都要算 $d \times V$ 的矩阵乘 | ❌ 同样文本 token 更多 |
 
-例子：Qwen2.5-0.5B 的 $V = 151936$、$d = 896$，**光是词嵌入矩阵就有 1.36 亿参数，占全模型约 28%**（Lab 07b 会打印出来）。Llama-2 词表只有 32000，对中文很不友好（一个汉字常被切成多个 token）；Llama-3 扩到 128256、Qwen 用 151936，中文同样的内容 token 数显著减少——**这直接等于中文推理变快、变便宜**。
+例子：Qwen2.5-0.5B 的 $V = 151936$、$d = 896$，**光是词嵌入矩阵就有 1.36 亿参数，占全模型约 28%**（Lab 07b 会打印出来）。Llama-2 词表只有 32000，对中文很不友好（一个汉字常被切成多个 token）；Llama-3 扩到 128256、Qwen2.5 小尺寸（0.5B/1.5B/3B）用 151936（且词嵌入与 LM Head 共享权重），大尺寸（7B 及以上）用 152064（不共享），中文同样的内容 token 数显著减少——**这直接等于中文推理变快、变便宜**。
 
 > 🔗 深入：Karpathy 的视频 *Let's build the GPT Tokenizer* 与代码 [minbpe](https://github.com/karpathy/minbpe)。
 
@@ -99,7 +99,8 @@ $$ e_{tj} = a(s_{t-1}, h_j), \qquad \alpha_{tj} = \frac{\exp(e_{tj})}{\sum_k \ex
 - **2022 Chinchilla（Hoffmann 等）**：在**固定训练算力**下，最优做法是参数量与训练 token 数同比例增长，约 **每个参数 20 个 token**。此前的大模型普遍"参数太多、数据太少"。
 - **2022 InstructGPT → ChatGPT**：用指令微调 + RLHF 让模型"听话"，大模型从研究品变成亿级用户产品。
 
-**关键转折**：Chinchilla 只优化了**训练**成本。但一个模型训练一次，却要被调用成千上万亿次。2023 年的 Llama 明确把目标改成"**给定推理预算下效果最好**"——宁可用远超 Chinchilla 比例的数据去**过度训练一个小模型**（Llama-1-7B 用了 1T token，Llama-3-8B 用了 15T token，约为 Chinchilla 比例的近百倍）。
+**关键转折**：Chinchilla 只优化了**训练**成本。但一个模型训练一次，却要被调用成千上万亿次。2023 年的 Llama 明确把目标改成"**给定推理预算下效果最好**"——宁可用远超 Chinchilla 比例的数据去**过度训练一个小模型**（Llama-3-8B 用了 15T token ≈ 1870 token/参数，是 Chinchilla 比例 20 的约 93 倍；
+早期的 Llama-1-7B 只用了 1T ≈ 143 token/参数，约 7 倍）。
 **从这一刻起，推理效率成为模型设计本身的一等公民**：下面第五节的 MQA/GQA/MLA、MoE、词表扩大，全部带着"推理更便宜"的动机。
 
 ---
@@ -177,7 +178,7 @@ $$ \text{SwiGLU}(x) = \big(\text{SiLU}(x W_{\text{gate}}) \odot x W_{\text{up}}\
 | FFN 激活 | ReLU | GELU | **SwiGLU** | SwiGLU | SwiGLU（**MoE**） |
 | 位置编码 | 正弦绝对 | 可学习绝对 | **RoPE** | RoPE（大底数） | RoPE（解耦 + YaRN） |
 | 注意力 | MHA | MHA | MHA | **GQA** | **MLA** |
-| 词表 | ~37K（BPE） | 50257（字节 BPE） | 32000 | 128256 / 151936 | 129280 |
+| 词表 | ~37K（BPE） | 50257（字节 BPE） | 32000 | 128256 / 151936（Qwen2.5 小尺寸）或 152064（7B+） | 129280 |
 
 > 🎯 **读完本篇你应该能做到**：打开任意一个模型的 `config.json`（例如 Hugging Face 上 Qwen2.5 的配置），逐个字段说出它是什么、为什么有它、对推理的显存和速度有什么影响。Lab 07b 的第一个任务就是这个。
 

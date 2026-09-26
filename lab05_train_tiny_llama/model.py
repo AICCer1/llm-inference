@@ -48,7 +48,13 @@ class RMSNorm(nn.Module):
         # 求均方要在 FP32 里做，BF16 累加会丢精度（第 8 篇 §6.3）
         xf = x.float()
         xf = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + self.eps)
-        return xf.to(x.dtype) * self.weight
+        # 注意这里【不要】写成 xf.to(x.dtype) * self.weight：
+        #   weight 是 FP32 参数，乘上去会把结果再提升回 FP32 —— 于是那次 .to() 只起到
+        #   "把归一化后的值先截断到 BF16 再算"的作用，纯属有损往返，输出依然是 FP32。
+        # 所以整个残差流是 FP32，autocast 只作用在子层内部的 Linear 上。这比纯 BF16 更准，
+        # 代价是显存/带宽占用更高。想改成真正的 BF16 残差流，需要同时处理 nn.Embedding
+        # （autocast 下它同样输出 FP32，残差加法会再把它提升回去），只改本行是不够的。
+        return xf * self.weight
 
 
 def precompute_rope(head_dim, max_len, base):

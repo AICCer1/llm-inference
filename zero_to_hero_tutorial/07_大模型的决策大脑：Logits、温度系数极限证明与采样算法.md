@@ -13,7 +13,7 @@ $$ h_{\text{last}} \in \mathbb{R}^{d_{\text{model}}} \quad \text{(例如 } 4096 
 但它还不是人类能看懂的字，我们需要把它映射回**整个词表（Vocabulary）**。
 
 ### 1. 词表矩阵乘法
-假设模型的词表里包含 $V$ 个词（现代大模型如 Llama-3 的词表大小 $V = 128,256$；Qwen-2.5 为 $152,064$）。
+假设模型的词表里包含 $V$ 个词（现代大模型如 Llama-3 的词表大小 $V = 128,256$；Qwen2.5 小尺寸 151,936、7B 及以上 152,064）。
 我们使用一个投影矩阵 $W_{\text{head}} \in \mathbb{R}^{d_{\text{model}} \times V}$ 与之相乘：
 
 $$ z = h_{\text{last}} W_{\text{head}} \in \mathbb{R}^V $$
@@ -191,7 +191,7 @@ $$
 ```
 第 1 篇：计算机如何从规则、统计到被 Transformer 彻底征服
    ▼
-第 2 篇：向量空间几何、点积夹角相似度与 Safe Softmax 溢出防护
+第 2 篇：向量空间几何、点积的几何意义与 Safe Softmax 溢出防护
    ▼
 第 3 篇：导数、反向传播、交叉熵，Softmax 雅可比与 p - y 梯度
    ▼

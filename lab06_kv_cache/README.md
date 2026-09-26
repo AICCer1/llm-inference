@@ -40,7 +40,7 @@ $$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right
 ```bash
 python3 lab06_kv_cache/kv_cache_benchmark.py
 ```
-*(本脚本自适应 PyTorch 或 NumPy，即使暂未安装 PyTorch 也能直接运行！)*
+*(本脚本自适应纯 Python 或 NumPy，即使暂未安装任何第三方库也能直接运行！)*
 
 ---
 

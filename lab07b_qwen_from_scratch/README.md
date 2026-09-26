@@ -9,7 +9,7 @@
 ## 规则
 
 `transformers` 只允许用来做两件事：**分词**，以及**作为标准答案和我们对拍**。
-模型的前向传播、RoPE、GQA、KV Cache、重复惩罚全部自己写，直接读取 `model.safetensors` 里的原始张量。核心代码 `QwenFromScratch.forward` 约 50 行。
+模型的前向传播、RoPE、GQA、KV Cache、重复惩罚全部自己写，直接读取 `model.safetensors` 里的原始张量。核心的 `QwenFromScratch.forward`（含 RMSNorm / RoPE / GQA 注意力 / SwiGLU / KV Cache）约 80 行。
 
 ## 运行
 

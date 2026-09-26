@@ -127,18 +127,39 @@ def exp3_io_model():
     title("实验 3: 显存访问量（元素个数）—— 朴素 vs FlashAttention")
     sram_elems = 100 * 1024 // 2      # 约 100 KB 片上 SRAM，BF16
     print("   假设片上 SRAM ≈ 100 KB。朴素 = 读 Q,K,V + 写 O + (写 S、读 S、写 P、读 P)；")
-    print("   Flash = 读 Q + 写 O + 每个 Q 块都把 K、V 完整读一遍（共 N/Br 遍）")
+    print("   Flash = 读 Q + 写 O + 每个 Q 块都把 K、V 完整读一遍（共 ceil(N/Br) 遍）")
+    print("   本文件用的是【元素个数】口径，不是字节。")
     for d in [64, 128]:
         Br = max(16, sram_elems // (4 * d) // 16 * 16)   # Q、K、V、O 四个块大致放得下
-        print(f"\n   头维度 d = {d} → 块大小约 Br = Bc = {Br}，理论节省倍数 ≈ 2·Br/d = {2 * Br / d:.1f}（量级即论文的 M/d²）")
+        # 本模型：朴素 = 4Nd + 4N²，Flash = 2Nd + 2N²d/Br
+        # N→∞ 时比值 → 2·Br/d，代入 Br ≈ M/(4d) 得 M/(2d²)。
+        ratio_pred = 2 * Br / d
+        print(f"\n   头维度 d = {d} → 块大小约 Br = Bc = {Br}（Br ≈ M/(4d)，M = {sram_elems} 元素）")
+        print(f"   本模型的渐近节省倍数 = 2·Br/d = {ratio_pred:.1f}，"
+              f"等价地 M/(2d²) = {sram_elems / (2 * d * d):.1f}")
+        print(f"   论文写的是 M/d² = {sram_elems / (d * d):.1f} —— 是同一个量级，差的这个 2 来自记账口径，")
+        print(f"   不是矛盾：本文的朴素项数了 4 趟 N²（写 S/读 S/写 P/读 P），论文的 Θ(Nd + N²) 只按元素数算一趟。")
         print(f"   {'序列长度 N':>10} | {'朴素':>10} | {'Flash':>10} | {'节省':>6} | {'朴素需要的 N² 额外显存 (1 个头)':>28}")
+        ratios = []
         for N in [1024, 4096, 16384, 65536]:
             naive = 4 * N * d + 4 * N * N
-            flash = 2 * N * d + (N // Br) * 2 * N * d
+            n_kv_passes = -(-N // Br)                     # ceil，不是 floor：最后那个不满的块也要读
+            flash = 2 * N * d + n_kv_passes * 2 * N * d
+            ratios.append(naive / flash)
             print(f"   {N:>10} | {naive:>10.2e} | {flash:>10.2e} | {naive / flash:5.1f}x | {2 * N * N * 2 / 1024**2:>25.0f} MB")
-    print("\n   👉 注意：访存节省倍数 ≈ M/d²，是一个与 N 无关的常数（d 越小、SRAM 越大，省得越多），并不会随 N 无限增大。")
+        # 断言：比值单调趋近 2·Br/d，且永远不超过它（尾块只会让节省变少，不会变多）
+        assert all(ratios[i] <= ratios[i + 1] + 1e-9 for i in range(len(ratios) - 1)), \
+            f"节省倍数应随 N 单调上升（尾块占比下降），实际 {ratios}"
+        assert ratios[-1] <= ratio_pred + 1e-9, \
+            f"节省倍数 {ratios[-1]:.2f} 不该超过渐近值 {ratio_pred:.2f}（ceil 只可能让它更小）"
+        assert ratios[-1] > ratio_pred * 0.95, \
+            f"N=65536 时应已接近渐近值 {ratio_pred:.2f}，实际 {ratios[-1]:.2f}"
+    print("\n   👉 注意：访存节省倍数是一个【与 N 无关的常数】（d 越小、SRAM 越大，省得越多），并不会随 N 无限增大。")
+    print(f"      但小 N 时它还到不了那个常数（尾块占比大）；本例要到 N≳16K 才收敛到 {ratio_pred:.1f}x。")
     print("      随 N 增长的真正收益是【额外显存从 O(N²) 降到 O(N)】—— 没有它，长上下文根本放不进显存。")
     print("      再加上多个 kernel 融合成一个（省掉启动开销与 FP32 中间结果），实际加速往往比这个模型更大，见实验 5。")
+    print("      ⚠️ 这条结论在真机上不总是成立：把整行缓存进 shared 会压低占用率，N 一大反而变慢 ——")
+    print("         见 cuda_softmax/README.md 里 N=8192 的实测（同一个道理也是 FlashAttention 必须分块的原因）。")
 
 
 # =====================================================================

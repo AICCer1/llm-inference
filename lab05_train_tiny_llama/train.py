@@ -3,7 +3,7 @@ Lab 05 - 训练: 用本仓库自己的教程文本，训练一个字符级的迷
 
 对应教程: 第 3 篇（交叉熵、困惑度、Adam、初始损失检查）、第 5 篇（架构）
 
-运行（GPU 约 30 秒；CPU 可加 --device cpu --steps 300，效果差一些但能跑通）:
+运行（GPU 约 0.5~1.5 分钟，取决于显卡时钟状态；CPU 可加 --device cpu --steps 300，效果差一些但能跑通）:
   .venv/bin/python lab05_train_tiny_llama/train.py
 产物:
   lab05_train_tiny_llama/tiny_llama.pt   (权重 + 配置 + 字表，供 generate.py 使用)

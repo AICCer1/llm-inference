@@ -39,7 +39,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu128
 6. ⚡ **[第 6 篇：什么是推理？自回归生成全生命周期与 KV Cache 代数证明](zero_to_hero_tutorial/06_什么是推理：自回归生成全生命周期与KVCache代数证明.md)**
    - 训练与推理的本质鸿沟、Prefill（算力受限）vs Decode（访存受限）、KV Cache 代数展开冗余消除证明、显存爆炸计算公式与 PagedAttention 诞生背景。
 7. 🧠 **[第 7 篇：大模型的决策大脑：Logits、温度系数极限证明与采样算法](zero_to_hero_tutorial/07_大模型的决策大脑：Logits、温度系数极限证明与采样算法.md)**
-   - LM Head 词表投影、**【定理推导】温度参数 $T \to 0$（狄拉克 $\delta$ 贪婪收敛）与 $T \to \infty$（均匀分布）严格数学极限证明**、Top-K 截断、Top-P 动态核采样与重复惩罚。
+   - LM Head 词表投影、**【定理推导】温度参数 $T \to 0$（唯一最大值时收敛到贪婪）与 $T \to \infty$（均匀分布）严格数学极限证明**、Top-K 截断、Top-P 动态核采样与重复惩罚。
 8. 🏭 **[第 8 篇：硬件视角：GPU 存储层级、FLOPs、算术强度与浮点格式](zero_to_hero_tutorial/08_硬件视角：GPU存储层级、FLOPs、算术强度与浮点格式.md)**
    - Roofline 模型、**推导"Decode 线性层算术强度 ≈ batch size"与"Decode 注意力算术强度 ≈ GQA 分组大小"**、Decode 耗时模型、算子融合、FP32 / BF16 / FP16 / FP8 / FP4 的位布局与精度陷阱。
 9. ⚡ **[第 9 篇：FlashAttention：Online Softmax 的严格推导与 IO 复杂度](zero_to_hero_tutorial/09_FlashAttention：OnlineSoftmax的严格推导与IO复杂度.md)**
@@ -82,7 +82,7 @@ flowchart TD
 
 | 对应篇 | 目录 | 核心内容 | 重点代码 |
 | :--- | :--- | :--- | :--- |
-| **第 3 篇** | [`lab03_autograd_from_scratch/`](lab03_autograd_from_scratch/) | 150 行纯 Python 自动求导，数值验证 Softmax 雅可比、交叉熵梯度、矩阵乘反向公式、梯度消失、XOR | `micrograd_from_scratch.py` |
+| **第 3 篇** | [`lab03_autograd_from_scratch/`](lab03_autograd_from_scratch/) | 约 350 行纯 Python 自动求导，数值验证 Softmax 雅可比、交叉熵梯度、矩阵乘反向公式、梯度消失、XOR | `micrograd_from_scratch.py` |
 | **第 4 篇** | [`lab04_transformer_microscope/`](lab04_transformer_microscope/) | **【极细基础】**从分词到下一个字的微观全貌、张量维度流动、RoPE 旋转、置换等变性与长程衰减的正确表述 | `01_tensor_trace_step_by_step.py`<br/>`02_rope_and_attention_microscope.py` |
 | **第 5 篇** | [`lab05_train_tiny_llama/`](lab05_train_tiny_llama/) | 用本仓库教程做语料训练一个迷你 Llama（RMSNorm / RoPE / GQA / SwiGLU），再做 KV Cache 对拍与采样 | `model.py`<br/>`train.py`<br/>`generate.py` |
 | **第 6 篇** | [`lab06_kv_cache/`](lab06_kv_cache/) | Prefill 与 Decode 阶段区别、自回归生成的重复计算痛点、KV Cache 机制与代码对比 | `kv_cache_benchmark.py` |
@@ -157,4 +157,4 @@ $$ \text{Total KV Cache} = B \times S \times 2 \times L \times H \times b $$
    ```bash
    .venv/bin/python lab05_train_tiny_llama/train.py && .venv/bin/python lab05_train_tiny_llama/generate.py
    ```
-   30 秒训练出一个会"背诵本教程"的迷你 Llama——然后再回到路径上，把它的每一行都弄懂。
+   花一分钟训练出一个会"背诵本教程"的迷你 Llama——然后再回到路径上，把它的每一行都弄懂。

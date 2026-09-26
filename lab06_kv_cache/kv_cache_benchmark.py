@@ -1,5 +1,5 @@
 """
-Lab 06: KV Cache 原理与基准测试仿真 (零外部依赖，自动适配 Pure Python / NumPy / PyTorch)
+Lab 06: KV Cache 原理与基准测试仿真 (零外部依赖，自动适配 Pure Python / NumPy)
 
 本脚本直观演示：
 1. 朴素自回归解码（无 KV Cache）：每次重新计算前文所有 token 的 K, V 投影。

@@ -36,6 +36,8 @@ MODELS = {
         "kv_heads": 4,       # GQA
         "head_dim": 128,
         "hidden_size": 3584,
+        # 注意：Qwen2.5 小尺寸（0.5B/1.5B/3B）词表是 151936 且与 LM Head 共享权重，
+        # 7B 及以上才是 152064 且不共享。这里两个都是 7B+ 的配置（第 5 篇 §5.2）。
         "vocab_size": 152064,
     },
     "Qwen2.5-72B": {
@@ -58,8 +60,9 @@ MODELS = {
 GPUS = {
     "RTX 5060 Ti (16GB) [本机配置]": {
         "vram_gb": 16.0,
-        "bandwidth_gbs": 448.0,   # 标称值；measure_gpu_roofline.py 实测拷贝带宽约 380 GB/s
-        "fp16_tflops": 48.0       # 本机实测 BF16 稠密矩阵乘约 48 TFLOP/s（FP32 累加）
+        "bandwidth_gbs": 448.0,            # 标称值（厂商标注的 448 GB/s）
+        "bandwidth_gbs_measured": 380.0,   # measure_gpu_roofline.py 实测拷贝带宽
+        "fp16_tflops": 48.0                # 本机实测 BF16 稠密矩阵乘约 48 TFLOP/s（FP32 累加）
     },
     "RTX 4090 (24GB)": {
         "vram_gb": 24.0,
@@ -93,8 +96,13 @@ def calculate_kv_cache_per_token_bytes(model_cfg, kv_bits=16):
 
 def calculate_weight_memory_gb(params_b, weight_bits=16):
     """
-    计算模型权重显存占用 (GB)
-    1B 参数在 16-bit 下占用约 2GB (按照 1024^3 换算)
+    计算模型权重显存占用，单位 **GiB**（除以 1024^3）。
+
+    注意这里的口径：参数量按**十进制**算（1B = 10^9 个参数），存储按**二进制**换算（1024^3）。
+    所以 1B 参数在 16-bit 下是 1.86 GiB，不是"2GB"。
+    这么选是为了和 GPU 的 vram_gb（16GB 卡 = 16 GiB 容量）能直接比较 ——
+    上面那段 Roofline 计算用的是十进制 GB（bytes / 1e9），因为要和 GB/s 相除，两处**故意不一致**，
+    下面的打印会把单位写清楚。
     """
     bytes_per_param = weight_bits / 8.0
     total_bytes = params_b * (10**9) * bytes_per_param
@@ -115,10 +123,10 @@ def print_model_analysis(model_name, gpu_name, context_len=4096, batch_size=4):
     w_int4 = calculate_weight_memory_gb(model["params_b"], 4)
 
     print(f"📌 模型基本参数: {model['params_b']}B 参数 | {model['layers']} 层 | Q头={model['q_heads']} | KV头={model['kv_heads']}")
-    print(f"📌 权重显存需求:")
-    print(f"   - FP16 (16-bit) : {w_fp16:6.2f} GB")
-    print(f"   - INT8 / FP8    : {w_int8:6.2f} GB")
-    print(f"   - INT4 / AWQ    : {w_int4:6.2f} GB")
+    print(f"📌 权重显存需求（GiB = bytes/1024³，和显卡容量同口径）:")
+    print(f"   - FP16 (16-bit) : {w_fp16:6.2f} GiB")
+    print(f"   - INT8 / FP8    : {w_int8:6.2f} GiB")
+    print(f"   - INT4 / AWQ    : {w_int4:6.2f} GiB")
 
     # 2. KV Cache 计算
     kv_fp16_bytes = calculate_kv_cache_per_token_bytes(model, 16)
@@ -140,22 +148,27 @@ def print_model_analysis(model_name, gpu_name, context_len=4096, batch_size=4):
     total_mem_int4 = w_int4 + total_kv_fp16_gb + cuda_overhead_gb
 
     print(f"   - 全量 Token 总数   : {total_tokens} tokens")
-    print(f"   - KV Cache 总占用  : {total_kv_fp16_gb:6.2f} GB (FP16)")
-    print(f"   - FP16 总显存需求  : {total_mem_fp16:6.2f} GB (权重 {w_fp16:.1f}G + KV {total_kv_fp16_gb:.1f}G + 基础开销 {cuda_overhead_gb:.1f}G)")
-    print(f"   - INT4 权重总显存  : {total_mem_int4:6.2f} GB (权重 {w_int4:.1f}G + KV {total_kv_fp16_gb:.1f}G + 基础开销 {cuda_overhead_gb:.1f}G)")
+    print(f"   - KV Cache 总占用  : {total_kv_fp16_gb:6.2f} GiB (FP16)")
+    print(f"   - FP16 总显存需求  : {total_mem_fp16:6.2f} GiB (权重 {w_fp16:.1f} + KV {total_kv_fp16_gb:.1f} + 基础开销 {cuda_overhead_gb:.1f})")
+    print(f"   - INT4 权重总显存  : {total_mem_int4:6.2f} GiB (权重 {w_int4:.1f} + KV {total_kv_fp16_gb:.1f} + 基础开销 {cuda_overhead_gb:.1f})")
 
     vram_avail = gpu["vram_gb"]
-    print(f"\n🎯 硬件显存匹配状态 ({gpu_name} - {vram_avail}GB):")
+    print(f"\n🎯 硬件显存匹配状态 ({gpu_name} - {vram_avail:.0f} GiB):")
     if total_mem_fp16 <= vram_avail:
-        print(f"   ✅ FP16 原生精度：可流畅运行！(显存剩余 {vram_avail - total_mem_fp16:.2f} GB)")
+        print(f"   ✅ FP16 原生精度：显存放得下（剩余 {vram_avail - total_mem_fp16:.2f} GiB）")
     elif total_mem_int4 <= vram_avail:
-        print(f"   ⚠️ FP16 显存不足 (超标 {total_mem_fp16 - vram_avail:.2f} GB)，但通过 INT4/AWQ 量化即可完美装下！(剩余 {vram_avail - total_mem_int4:.2f} GB)")
+        print(f"   ⚠️ FP16 显存不足 (超标 {total_mem_fp16 - vram_avail:.2f} GiB)，但 INT4/AWQ 量化后放得下 (剩余 {vram_avail - total_mem_int4:.2f} GiB)")
     else:
-        print(f"   ❌ INT4 量化后仍超出显存容量 (超标 {total_mem_int4 - vram_avail:.2f} GB)，需使用多卡张量并行 (TP) 或更激进的 Offload！")
+        print(f"   ❌ INT4 量化后仍超出容量 (超标 {total_mem_int4 - vram_avail:.2f} GiB)，需多卡张量并行 (TP) 或 Offload")
+    print(f"   ⚠️ 这只是【静态显存账本】。真实部署还要算上激活、CUDA Context、碎片，"
+          f"1.2 GiB 的开销常数很乐观——贴着容量上限的配置（比如 7B FP16 放在 16 GiB 上）实际常常 OOM。")
 
     # 4. Roofline 显存带宽解码速率下界 (Batch Size = 1)
     # 注意单位：权重按字节算，带宽是 10^9 B/s，不要把 GiB 和 GB/s 直接相除（会差 7.4%）
-    bw = gpu["bandwidth_gbs"]
+    # ⚠️ 这里必须用【实测】带宽，不能用标称值：标称是硬件上界，实际达不到。
+    #    lab07b 的手写实现也默认用 380 GB/s，两个 lab 要同口径才能互相印证。
+    bw = gpu.get("bandwidth_gbs_measured", gpu["bandwidth_gbs"])
+    bw_nominal = gpu["bandwidth_gbs"]
     w_fp16_bytes = model["params_b"] * 1e9 * 2
     w_int4_bytes = model["params_b"] * 1e9 * 0.5
     # 理论单 token 最低耗时 (ms) = 模型权重读取时间
@@ -164,9 +177,11 @@ def print_model_analysis(model_name, gpu_name, context_len=4096, batch_size=4):
     speed_fp16 = 1000.0 / t_fp16_ms if t_fp16_ms > 0 else 0
     speed_int4 = 1000.0 / t_int4_ms if t_int4_ms > 0 else 0
 
-    print(f"\n⚡ Decode 阶段理论单流最大生成速度 (基于显存带宽 {bw} GB/s):")
-    print(f"   - FP16 解码极限 : {t_fp16_ms:5.1f} ms/token -> 最大理论吞吐约 {speed_fp16:5.1f} tokens/s")
-    print(f"   - INT4 解码极限 : {t_int4_ms:5.1f} ms/token -> 最大理论吞吐约 {speed_int4:5.1f} tokens/s (加速 {t_fp16_ms/t_int4_ms:.1f}x)")
+    print(f"\n⚡ Decode 阶段理论单流最大生成速度")
+    print(f"   （用实测带宽 {bw:.0f} GB/s 计算；标称 {bw_nominal:.0f} GB/s 只是硬件上界，"
+          f"用它算会乐观 {(bw_nominal / bw - 1) * 100:.0f}%）")
+    print(f"   - FP16 解码极限 : {t_fp16_ms:5.1f} ms/token -> 上限约 {speed_fp16:5.1f} tokens/s")
+    print(f"   - INT4 解码极限 : {t_int4_ms:5.1f} ms/token -> 上限约 {speed_int4:5.1f} tokens/s (加速 {t_fp16_ms/t_int4_ms:.1f}x)")
 
     # 5. 更完整的 Decode 下界：每一步不仅要读一遍权重，还要读一遍【所有请求的全部 KV Cache】
     #    一步耗时 >= (权重字节 + B * S * 每token KV字节) / 带宽，这一步产出 B 个 token

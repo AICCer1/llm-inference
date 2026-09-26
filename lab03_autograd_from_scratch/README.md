@@ -36,5 +36,5 @@ python3 lab03_autograd_from_scratch/micrograd_from_scratch.py
 
 ## 学完之后
 
-你已经可以放心使用 `torch.autograd` 了——它做的事和这 150 行完全一样，只是算子换成了张量、实现换成了 C++/CUDA。
+你已经可以放心使用 `torch.autograd` 了——它做的事和这 350 行完全一样，只是算子换成了张量、实现换成了 C++/CUDA。
 下一步：[第 5 篇](../zero_to_hero_tutorial/05_从原版Transformer到Llama与DeepSeek：每一处改动的历史动机.md) → [Lab 05：亲手训练一个迷你 GPT](../lab05_train_tiny_llama/)。

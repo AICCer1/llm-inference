@@ -172,9 +172,13 @@ def run_simulation():
     util_static = total_tokens / (max_batch * makespan_static)
     util_cont = total_tokens / (max_batch * makespan_cont)
     print(f"   {'槽位占用率 (有效token/容量)':<22} | {util_static * 100:<21.1f}% | {util_cont * 100:<21.1f}%")
-    # 连续批处理从不给已结束的请求陪跑，所以它的 padding 无效计算按构造就是 0；
-    # 真正可比的是"槽位占用率"：总容量 max_batch × 总步数 中有多少被有效 token 用上
-    assert bubble_cont == 0.0 and util_cont > util_static
+    # ⚠️ 注意 bubble_cont 恒等于 0.0 —— 它是【构造使然】，不是优化出来的结果：
+    #    上面的 total_slot_steps += len(active_slots) 与每个活跃槽 +1 个 token 是同一件事，
+    #    所以 (x - x) / x 永远是 0。拿它当断言等于什么都没断言（这里就不写了）。
+    # 真正可能因调度器写错而失败的，是下面这两条：
+    assert util_cont > util_static, f"连续批处理的槽位占用率 {util_cont:.1%} 应高于静态批处理的 {util_static:.1%}"
+    assert makespan_cont < makespan_static, \
+        f"连续批处理的总耗时 {makespan_cont} 应短于静态批处理的 {makespan_static}"
 
     print("\n🚀 连续批处理核心收益:")
     print(f"   - 总耗时缩短 : {(1 - makespan_cont / makespan_static) * 100:.1f}%")

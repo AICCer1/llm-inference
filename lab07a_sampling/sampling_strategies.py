@@ -1,9 +1,9 @@
 """
 Lab 07a: 采样策略 (Sampling Strategies) 微观实验
 
-深入拆解模型生成下一个 Token 时的四大核心采样算法：
-1. 贪婪搜索 (Greedy Search)
-2. 温度系数调节 (Temperature Scaling)
+深入拆解模型生成下一个 Token 时的核心采样算法：
+（贪婪搜索 = 温度趋近 0 的极限，本脚本用 T→0 演示，不单独实现）
+1. 温度系数调节 (Temperature Scaling)
 3. Top-K 截断采样
 4. Top-P (核采样 Nucleus Sampling)
 5. 惩罚项机制 (Repetition Penalty 重复惩罚)
@@ -57,6 +57,9 @@ def apply_top_k(logits, k=3):
     """
     # 按分数排序后取前 K 个【下标】。不能用"分数 >= 第 K 大的值"做阈值：
     # 有并列时会多选，例如 [1, 1, 1, 0] 取 K=2 会留下 3 个。并列时按下标先后取（与 torch.topk 的常见行为一致）。
+    # 先钳制 K：k <= 0 时如果不处理，[:0] 会返回空集、所有位置都是 -1e9，
+    # softmax 之后变成"均匀分布"——一个静默的错误。合法范围是 [1, len(logits)]。
+    k = max(1, min(int(k), len(logits)))
     keep = set(sorted(range(len(logits)), key=lambda i: -logits[i])[:k])
     filtered_logits = [l if i in keep else -1e9 for i, l in enumerate(logits)]
     return softmax(filtered_logits)
@@ -157,12 +160,35 @@ def run_experiment():
 
 
 def self_check():
-    """自检：分布合法、Top-K 恰好保留 K 个（含并列情形）、Top-P 保留的是概率最高的若干个"""
+    """自检：分布合法、Top-K 恰好保留 K 个（含并列与 k<=0）、Top-P 保留的是概率最高的若干个"""
     for probs in [apply_temperature([3.2, 2.8, 1.5], t) for t in (0.2, 1.0, 2.0)] + [apply_top_p([3.2, 2.8, 1.5, -1.0], 0.85)]:
-        assert abs(sum(probs) - 1) < 1e-9 and min(probs) >= 0
-    tie = apply_top_k([1.0, 1.0, 1.0, 0.0], k=2)
-    assert sum(p > 1e-6 for p in tie) == 2, "并列时 Top-K 不应多选"
+        assert abs(sum(probs) - 1) < 1e-9 and min(probs) >= 0, "输出必须是一个合法分布"
+
+    # --- Top-K ---
+    assert sum(p > 1e-6 for p in apply_top_k([1.0, 1.0, 1.0, 0.0], k=2)) == 2, "并列时 Top-K 不应多选"
     assert sum(p > 1e-6 for p in apply_top_k([3.2, 2.8, 1.5, 1.2, -1.0], k=3)) == 3
+    assert sum(p > 1e-6 for p in apply_top_k([3.2, 2.8, 1.5], k=99)) == 3, "k 超过词表时应退化为不截断"
+    # k<=0 不钳制的话，[:0] 会让所有位置都是 -1e9，softmax 后变成均匀分布 —— 静默的错误
+    for bad_k in (0, -1):
+        got = apply_top_k([3.2, 2.8, 1.5], k=bad_k)
+        assert abs(got[0] - 1.0) < 1e-9, f"k={bad_k} 应钳制为 1（只留最大值），而不是变成均匀分布"
+    # 恰好保留 K 个，且保留的必须是分数最高的 K 个（不能是随便 K 个）
+    kept = {i for i, p in enumerate(apply_top_k([1.0, 5.0, 2.0, 4.0, 3.0], k=2)) if p > 1e-6}
+    assert kept == {1, 3}, f"Top-K 保留的应该是分数最高的两个下标 {{1,3}}，实际 {kept}"
+
+    # --- Top-P：保留的必须是"概率从大到小累加、刚好越过 P"的那个前缀 ---
+    lg = [3.2, 2.8, 1.5, 1.2, -1.0]
+    probs = softmax(lg)
+    order = sorted(range(len(lg)), key=lambda i: -probs[i])
+    for p in (0.3, 0.5, 0.85, 0.95):
+        kept = [i for i, v in enumerate(apply_top_p(lg, p)) if v > 1e-9]
+        cum, expect = 0.0, []
+        for i in order:
+            expect.append(i)
+            cum += probs[i]
+            if cum >= p:
+                break
+        assert sorted(kept) == sorted(expect), f"p={p}: Top-P 应保留 {sorted(expect)}，实际 {sorted(kept)}"
 
 
 if __name__ == "__main__":

@@ -177,6 +177,13 @@ def exp2_utilization():
     print(f"   {'方案':<26} | {'可同时服务':>10} | {'显存浪费率':>10}")
     print(f"   {'按 max_len 预留连续空间':<22} | {static_slots:>10} | {waste_static:>9.0%}")
     print(f"   {'PagedAttention (块=16)':<24} | {paged_slots:>10} | {waste_paged:>9.1%}")
+    # 分页的两个核心收益，逐条断言：
+    assert paged_slots > static_slots, "分页必须能服务更多并发请求，否则这个方案没有意义"
+    assert waste_paged < waste_static, "分页的浪费率必须低于按 max_len 预留"
+    # 分页的浪费上界是每序列最后一块没写满（< 16 token），不是 0
+    assert waste_paged < 16 / avg_final, \
+        f"分页浪费率 {waste_paged:.2%} 超过了「每序列最后一块没写满」的上界 {16 / avg_final:.2%}，" \
+        f"说明块分配器有别的浪费"
     print(f"   👉 并发数提升 {paged_slots / static_slots:.1f} 倍。第 8 篇说过 Decode 时 batch 越大吞吐越高，")
     print("      所以省下的显存会直接变成吞吐。vLLM 论文实测旧系统只有 20%~38% 的 KV 显存真正存了 token。")
 
@@ -242,8 +249,13 @@ def exp4_prefix_cache():
             print(f"   请求 {r}: 共 {len(tokens)} token，命中缓存 {hit} token，只需 Prefill {len(tokens) - hit} token")
     print(f"   ... 20 个请求合计 {total} token，其中 {saved} token（{saved / total:.0%}）直接复用缓存，免去 Prefill")
 
-    changed = [rng.randrange(50000)] + system_prompt[1:]          # 只改了开头第 1 个 token（比如写入了当前时间）
-    hit = prefill_with_cache(changed + [1, 2, 3])
+    # 只改开头第 1 个 token（比如提示词里写入了当前时间）。
+    # 必须【确定性地】换成一个不同的值：写成 rng.randrange(50000) 的话有 1/50000 的概率
+    # 抽到和原来相同，于是缓存照样命中，而打印出来的结论就变成了假的。
+    changed_first = (system_prompt[0] + 1) % 50000
+    assert changed_first != system_prompt[0]
+    hit = prefill_with_cache([changed_first] + system_prompt[1:] + [1, 2, 3])
+    assert hit == 0, f"第 1 个 token 变了之后不该有任何前缀命中，实际命中 {hit} token"
     print(f"   ⚠️ 把系统提示词的第 1 个 token 改掉后：命中 {hit} token —— 整个前缀缓存全部失效")
 
 
@@ -252,10 +264,13 @@ def exp4_prefix_cache():
 # =====================================================================
 def exp5_chunked_prefill():
     title("实验 5: Chunked Prefill —— 长 Prefill 插队时，正在 Decode 的用户会卡多久？")
-    # 用第 8 篇的耗时模型，参数取自本机实测（RTX 5060 Ti: 带宽 ~380 GB/s，BF16 ~48 TFLOP/s）
+    # 用第 8 篇的耗时模型，参数取自本机实测（RTX 5060 Ti）
+    # ⚠️ 这两个数都是 measure_gpu_roofline.py **已经实测达到**的值，不要再乘 MFU：
+    #    带宽 380 GB/s（实测拷贝带宽）、算力 48 TFLOP/s（实测 BF16 Tensor 稠密算力）。
+    #    两侧必须同口径——只给算力降额、访存却用 achieved 值，比值会偏一倍。
     # 模型：Qwen2.5-1.5B (BF16 权重约 3.1 GB)
     W_bytes, n_params = 3.1e9, 1.54e9
-    bw, peak, overhead = 380e9, 48e12 * 0.6, 3e-3        # 60% MFU + 3ms 固定开销
+    bw, peak, overhead = 380e9, 48e12, 3e-3              # 实测带宽 / 实测算力 + 3ms 固定开销
 
     def step_time(n_tokens):
         return max(W_bytes / bw, 2 * n_params * n_tokens / peak) + overhead
@@ -278,7 +293,12 @@ def exp5_chunked_prefill():
     print("   👉 不切块时，32 个用户在这一步里全部卡住几百毫秒（TPOT 尖刺）。切成小块后，每步耗时有上界，")
     print("      代价是新请求的 TTFT 略增。块越小，Decode 越平滑，但 Prefill 越慢（每步都要重新读一遍权重）。")
     ridge_tokens = W_bytes / bw * peak / (2 * n_params)
-    print(f"      另外：这个模型在这张卡上，每步 token 数低于约 {ridge_tokens:.0f} 时仍是访存受限（第 8 篇的拐点），")
+    # 交叉核对：这里的拐点必须和 lab08 实测的 AI* 一致（都是 实测算力 / 实测带宽）
+    ai_star = peak / bw
+    assert 100 < ai_star < 160, \
+        f"AI* = {ai_star:.0f} 与 lab08 在 5060 Ti 上实测的约 130 不符，检查两侧口径是否同源"
+    print(f"      另外：AI* = 算力/带宽 = {ai_star:.0f} FLOP/Byte，与 lab08 实测的约 130 一致。")
+    print(f"      所以这个模型每步 token 数低于约 {ridge_tokens:.0f} 时仍是访存受限（第 8 篇的拐点），")
     print(f"      此时往 Decode 批次里塞进一小段 Prefill 几乎不增加耗时 —— 这就是'两种瓶颈互补'。")
     print("      真实引擎（vLLM 的 max_num_batched_tokens）通常取几百到几千，在平滑度和 Prefill 效率间折中。")
 
